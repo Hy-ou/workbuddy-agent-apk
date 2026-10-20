@@ -1,0 +1,7 @@
+<?xml version="1.0" encoding="utf-8"?>
+<resources>
+    <color name="wb_bg">#0C0E14</color>
+    <color name="wb_surface">#14171F</color>
+    <color name="wb_accent">#5B7CFA</color>
+    <color name="wb_ic_launcher_background">#12151E</color>
+</resources>

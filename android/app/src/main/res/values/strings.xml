@@ -1,0 +1,5 @@
+<?xml version="1.0" encoding="utf-8"?>
+<resources>
+    <string name="app_name">WorkBuddy</string>
+    <string name="wb_accessibility_service_label">WorkBuddy 屏幕助手</string>
+</resources>

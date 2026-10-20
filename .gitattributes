@@ -1,0 +1,7 @@
+* text=auto
+*.png binary
+*.jar binary
+*.ps1 text eol=crlf
+*.kt text eol=lf
+*.kts text eol=lf
+*.md text eol=lf

@@ -1,0 +1,24 @@
+# ---- Android / Gradle ----
+android/.gradle/
+android/build/
+android/app/build/
+android/local.properties
+android/.idea/
+android/captures/
+android/.kotlin/
+*.apk
+*.aab
+*.iml
+
+# ---- 大体积二进制（由构建脚本生成，见 README「从源码构建」）----
+android/app/src/main/jniLibs/**/*.so
+android/app/src/main/assets/payload-dsh.zip
+
+# ---- 运行日志 / 临时产物 ----
+*.log
+.tmp-*/
+!android/app/src/test/resources/live/*.json
+
+# ---- 系统 ----
+.DS_Store
+Thumbs.db
