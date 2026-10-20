@@ -44,6 +44,8 @@ object MobileTools {
 3. {"tool":"type","text":"你好"} —— 在已聚焦的输入框里输入文字（先 tap 输入框，再 type）。
 4. {"tool":"scroll","dir":"down"} —— 滚动当前界面，dir 取 down 或 up。
 5. {"tool":"back"} —— 返回上一步；{"tool":"home"} —— 回到桌面。
+6. {"tool":"notify","title":"任务完成","text":"已为你整理好 3 个文件"} —— 发一条通知栏提醒（任务完成或需要用户关注时使用）。
+7. {"tool":"shell","cmd":"pm list packages | head"} —— 以 shell 权限执行系统命令（需用户安装并授权 Shizuku；可装应用、截屏、模拟输入、改设置）。
 
 【规则】
 - 每次只输出一个工具调用，等系统返回 {"ok":true,"result":"..."} 或 {"ok":false,"error":"..."} 后再决定下一步。
@@ -84,13 +86,18 @@ object MobileTools {
     // ── 内部实现 ──────────────────────────────────────────────────────
 
     private suspend fun runCommand(context: Context, json: String): String = withContext(Dispatchers.IO) {
-        if (!isReady(context)) {
-            return@withContext failure("无障碍服务未连接：请到「设置 → 无障碍」里开启 WorkBuddy 助手")
-        }
         val command = parseCommand(json)
             ?: return@withContext failure("无法解析工具指令，请只输出 {\"tool\":\"...\"} 形式的 JSON")
         val tool = command.string("tool")?.lowercase()
             ?: return@withContext failure("指令缺少 tool 字段")
+        // 不依赖无障碍的工具先处理
+        when (tool) {
+            "notify", "通知" -> return@withContext notify(context, command)
+            "shell", "命令" -> return@withContext shell(command)
+        }
+        if (!isReady(context)) {
+            return@withContext failure("无障碍服务未连接：请到「设置 → 无障碍」里开启 WorkBuddy 助手")
+        }
         val service = WbAccessibilityService.instance
             ?: return@withContext failure("无障碍服务未连接：请到「设置 → 无障碍」里开启 WorkBuddy 助手")
         when (tool) {
@@ -100,7 +107,32 @@ object MobileTools {
             "scroll", "滚动" -> scroll(service, command)
             "back", "返回" -> if (service.pressBack()) success("已返回上一页") else failure("返回操作失败")
             "home", "桌面" -> if (service.pressHome()) success("已回到桌面") else failure("回到桌面失败")
-            else -> failure("未知工具：$tool（可用：screen / tap / type / scroll / back / home）")
+            "notify", "通知" -> notify(context, command)
+            "shell", "命令" -> shell(command)
+            else -> failure("未知工具：$tool（可用：screen / tap / type / scroll / back / home / notify / shell）")
+        }
+    }
+
+    /** 发通知：不依赖无障碍，也不需要 Shizuku。 */
+    private fun notify(context: Context, command: JsonObject): String {
+        val title = command.string("title") ?: "WorkBuddy"
+        val text = command.string("text") ?: command.string("body") ?: ""
+        if (text.isBlank()) return failure("notify 需要 text 字段（通知正文）")
+        val ok = com.workbuddy2api.panel.util.NotificationCenter.post(context, title, text)
+        return if (ok) success("已发送通知：$title") else failure("通知发送失败：请检查通知权限是否已开启")
+    }
+
+    /** shell 工具：经 Shizuku 以系统 shell 身份执行命令。 */
+    private suspend fun shell(command: JsonObject): String {
+        val cmd = command.string("cmd") ?: command.string("command")
+        if (cmd.isNullOrBlank()) return failure("shell 需要 cmd 字段（要执行的命令）")
+        if (cmd.length > 4000) return failure("命令过长（上限 4000 字符）")
+        return try {
+            val r = com.workbuddy2api.panel.util.ShizukuShell.exec(cmd)
+            if (r.code == 0) success(r.output.ifBlank { "（无输出）" })
+            else failure("命令退出码 ${r.code}：${r.output.take(2000)}")
+        } catch (e: Exception) {
+            failure(e.message ?: "Shizuku 执行失败")
         }
     }
 

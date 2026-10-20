@@ -13,8 +13,8 @@ android {
         applicationId = "com.workbuddy2api.panel"
         minSdk = 24
         targetSdk = 35
-        versionCode = 8
-        versionName = "3.4.0"
+        versionCode = 9
+        versionName = "3.5.0"
         vectorDrawables { useSupportLibrary = true }
         ndk { abiFilters += listOf("arm64-v8a", "x86_64") }
     }
@@ -83,6 +83,9 @@ dependencies {
     implementation("org.jetbrains.kotlinx:kotlinx-coroutines-android:1.9.0")
     implementation("org.jetbrains.kotlinx:kotlinx-serialization-json:1.7.3")
     implementation("com.squareup.okhttp3:okhttp:4.12.0")
+    // Shizuku：免 root 的系统 shell 通道（可选，未安装 Shizuku 时自动降级）
+    implementation("dev.rikka.shizuku:api:13.1.5")
+    implementation("dev.rikka.shizuku:provider:13.1.5")
 
     coreLibraryDesugaring("com.android.tools:desugar_jdk_libs:2.1.2")
 

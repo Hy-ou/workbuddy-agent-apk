@@ -198,3 +198,15 @@ cd android && gradle test
     「保存修改为补丁」把与出厂不同的文本/配置/图片（单个 ≤8 MB）存入 `user-patch/`，
     启动前自动回放；「清空补丁」删除补丁并让内核树重新解压。
   - 新增单测 `DshPluginIdTest`（包名 → 插件 id 映射、内置禁用策略）。
+
+- **3.5.0（2026-10-20）**：通知能力 + Shizuku 特权通道 + 扩展能力面板。
+  - **AI 通知**（`util/NotificationCenter.kt`）：原生助手新增 `notify` 工具
+    （`{"tool":"notify","title":"…","text":"…"}`），任务完成/需要关注时推送通知栏。
+  - **Shizuku 免 root 特权**（`util/ShizukuShell.kt`）：用户安装 Shizuku 并授权后，
+    助手新增 `shell` 工具，可装应用、模拟输入、截屏、改系统设置（`pm/input/screencap/settings`）。
+    未安装/未授权时自动降级，不打扰用户；Manifest 增加 `moe.shizuku.manager.permission.API_V23`
+    与 `ShizukuProvider`。
+  - **扩展能力面板**（`ui/settings/ExtensionsCard.kt`）：通知状态、Shizuku 状态与一键授权、
+    工具链状态（node/npm/git/python 是否内置）、**社区插件精选清单**
+    （12 个 dsh 生态插件，一键复制包名到 DSH 插件面板安装）。
+  - Shizuku 依赖：`dev.rikka.shizuku:api` + `provider` 13.1.5；`newProcess` 为内部方法，用反射调用。

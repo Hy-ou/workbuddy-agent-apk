@@ -5,6 +5,30 @@
 
 ---
 
+## 3.5.0 — 2026-10-20
+
+### 新增：通知、Shizuku 特权、扩展能力面板（参考 deepseek-harness-android-app 与 DSH Mobile）
+
+- **AI 通知**：`util/NotificationCenter.kt` + 原生助手 `notify` 工具；只依赖通知权限。
+- **Shizuku 免 root 特权**：`util/ShizukuShell.kt`（可用性/授权/命令执行/截屏），
+  助手 `shell` 工具可 `pm install`、`input tap`、`screencap`、`settings put`；
+  未安装 Shizuku 时优雅降级。Manifest 增加权限与 `ShizukuProvider`。
+- **扩展能力面板**：通知/Shizuku 状态、工具链状态（node/npm/git/python）、
+  社区插件精选清单（12 个，复制包名到 DSH 插件面板安装）。
+- 依赖：`dev.rikka.shizuku:api:13.1.5`、`provider:13.1.5`（`newProcess` 反射调用）。
+
+### 边界说明（未包含）
+
+- 参考项目的「扩展中心」19 项工具链安装（Python/Go/Rust/… + Termux 镜像 + 依赖闭包 + 原子发布）
+  与「社区插件一键安装」需要内核内置 npm/pnpm/git（当前精简包已剔除，约 +120 MB），
+  以及包管理器级实现，属于后续独立迭代；本期只提供清单与状态，不提供静默安装。
+- DSH 侧的 `notify` 工具需要额外插件包（本期只在原生助手提供）。
+
+### 验证
+
+- `testDebugUnitTest` + `lintDebug` 通过；release APK 106.8 MB；真机安装成功。
+
+---
 ## 3.4.0 — 2026-10-20
 
 ### 新增：P2 宿主能力

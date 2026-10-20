@@ -8,6 +8,8 @@
     <uses-permission android:name="android.permission.FOREGROUND_SERVICE_DATA_SYNC" />
     <uses-permission android:name="android.permission.POST_NOTIFICATIONS" />
     <uses-permission android:name="android.permission.REQUEST_IGNORE_BATTERY_OPTIMIZATIONS" />
+    <!-- Shizuku 特权通道（可选）：用户安装 Shizuku 并授权后，AI 才能以 shell 身份执行系统命令 -->
+    <uses-permission android:name="moe.shizuku.manager.permission.API_V23" />
 
     <!-- DSH 内核需要检索/操作手机文件：Android 11+ 申请「所有文件访问」，更低版本用读写权限。 -->
     <uses-permission
@@ -30,6 +32,13 @@
         android:supportsRtl="true"
         android:theme="@style/Theme.WorkBuddyPanel"
         android:usesCleartextTraffic="true">
+
+        <provider
+            android:name="rikka.shizuku.ShizukuProvider"
+            android:authorities="${applicationId}.shizuku"
+            android:enabled="true"
+            android:exported="true"
+            android:multiprocess="false" />
 
         <service
             android:name=".gateway.GatewayService"
