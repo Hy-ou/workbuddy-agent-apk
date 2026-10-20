@@ -18,9 +18,22 @@ $ErrorActionPreference = "Stop"
 $root = Split-Path -Parent $PSScriptRoot
 if (-not $ApkDir) { $ApkDir = Join-Path $root "release" }
 if (-not $NotesFile) {
-    $candidate = Join-Path $ApkDir "RELEASE_NOTES-${Tag}.md"
-    if (Test-Path $candidate) { $NotesFile = $candidate }
-    else { $NotesFile = Join-Path $ApkDir "README.md" }
+    # 支持 RELEASE_NOTES-v3.7.1.md 与 RELEASE_NOTES-3.7.1.md 两种命名
+    $bare = $Tag -replace '^v', ''
+    foreach ($name in @("RELEASE_NOTES-$Tag.md", "RELEASE_NOTES-$bare.md")) {
+        $candidate = Join-Path $ApkDir $name
+        if (Test-Path $candidate) { $NotesFile = $candidate; break }
+    }
+    if (-not $NotesFile) {
+        # 找不到就用仓库 release/ 目录下的同名说明，绝不静默使用 README
+        foreach ($name in @("RELEASE_NOTES-$Tag.md", "RELEASE_NOTES-$bare.md")) {
+            $candidate = Join-Path (Split-Path $PSScriptRoot -Parent) "release\$name"
+            if (Test-Path $candidate) { $NotesFile = $candidate; break }
+        }
+    }
+    if (-not $NotesFile) {
+        throw "找不到 $Tag 的发布说明：请创建 release/RELEASE_NOTES-$bare.md"
+    }
 }
 
 function Resolve-RepoFromRemote {
