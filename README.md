@@ -64,7 +64,8 @@
 ### 2.1 直接安装
 
 ```bash
-adb install -r dist/WorkBuddy-3.2.0.apk
+# 从 Release 页面下载对应 APK 后安装
+adb install -r WorkBuddy-3.2.0.apk
 ```
 
 首次启动后：自动拉起内置网关（`127.0.0.1:7863`），在「账号」页扫码/登录添加账号，即可使用；
