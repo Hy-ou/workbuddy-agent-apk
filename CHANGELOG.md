@@ -5,6 +5,16 @@
 
 ---
 
+## 3.7.1 — 2026-10-20
+
+### 修复：16 KB 页对齐告警
+
+- `libwbnode_shim.so` 改用 `-Wl,-z,max-page-size=16384` 编译（原为 4 KB 对齐）。
+- APK 内 15 个 arm64 库全部核查为 16 KB 对齐。
+- 新增 `android/dsh/check-16kb.ps1` 校验脚本（CI 可用，失败返回 1）。
+- 版本 3.7.1 / versionCode 13。
+
+---
 ## 3.7.0 — 2026-10-20
 
 ### 修复：DSH 内安装社区插件报错（`spawn pnpm EACCES`）
