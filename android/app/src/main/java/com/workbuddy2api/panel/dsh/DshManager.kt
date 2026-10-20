@@ -133,6 +133,7 @@ class DshManager private constructor(private val app: Application) {
         runCatching { LocalBridge.start(app) }
         // 内核命令 notify（走回环桥发通知）；清掉旧版本尝试过的插件登记
         val notifyScript = runCatching { NotifyCli.ensure(app, home) }.getOrNull()
+        ensureBinShims(home)
         runCatching { InstalledPlugins.remove(app, NotifyPlugin.PACKAGE) }
         syncManagedPatch(home)
         val replayed = runCatching { UserPatches.replay(kernel, home) }.getOrDefault(0)
@@ -140,6 +141,7 @@ class DshManager private constructor(private val app: Application) {
         val binjs = File(kernel, "dshroot/lib/node_modules/@deepseek-ai/dsh/lib/bin.js")
         if (!node.isFile) return State.Failed("未找到 node（libdshnode.so），请重新安装 APK")
         if (!binjs.isFile) return State.Failed("内核树不完整（缺少 bin.js），请清除应用数据重试")
+        runCatching { ensurePnpmRuntime(home, node) }
 
         val log = logFile()
         rotateLogIfNeeded(log)
@@ -163,6 +165,8 @@ class DshManager private constructor(private val app: Application) {
         env["SHELL"] = "/system/bin/sh"
         env["WB_BRIDGE_TOKEN"] = LocalBridge.token(app)
         notifyScript?.let { env["WB_NOTIFY"] = it.absolutePath }
+        env["WB_NODE"] = node.absolutePath
+        env["WB_DSH_HOME"] = home.absolutePath
         env["PATH"] = listOf(
             File(home, "tools/node_modules/.bin").absolutePath,
             File(kernel, "bin").absolutePath,
@@ -393,6 +397,57 @@ class DshManager private constructor(private val app: Application) {
 
     fun importBackup(uri: Uri): Result<DshBackup.ImportResult> =
         DshBackup.import(app, homeDir(), uri)
+    /**
+     * 在 home/bin 里创建 pnpm / npm / node 的符号链接，指向 jniLibs 里的 ELF 启动器。
+     *
+     * 为什么需要：App 数据目录里的脚本无法 exec（SELinux），而 DSH 插件安装是
+     * `spawn("pnpm")`；符号链接指向 nativeLibraryDir 的可执行文件（标签允许 exec），
+     * 启动器再按 argv[0] 决定跑 pnpm.cjs / npm-cli.js。
+     */
+    /** 首次启动时用内置 npm 装一个与应用前缀无关的 pnpm（payload 自带的 pnpm 硬编码 Termux 前缀）。 */
+    private fun ensurePnpmRuntime(home: File, node: File) {
+        val entry = File(home, "pnpmjs/node_modules/pnpm/bin/pnpm.mjs")
+        if (entry.isFile) return
+        Thread({
+            runCatching {
+                val npmCli = File(home, "npm/bin/npm-cli.js")
+                if (!npmCli.isFile) return@runCatching
+                val pb = ProcessBuilder(
+                    node.absolutePath, npmCli.absolutePath, "install", "pnpm",
+                    "--prefix", File(home, "pnpmjs").absolutePath,
+                    "--registry=https://registry.npmmirror.com",
+                    "--no-audit", "--no-fund", "--loglevel=error",
+                )
+                pb.directory(home)
+                pb.redirectErrorStream(true)
+                val e = pb.environment()
+                e["PATH"] = listOf(File(home, "bin").absolutePath, app.applicationInfo.nativeLibraryDir, "/system/bin").joinToString(":")
+                e["HOME"] = app.filesDir.absolutePath
+                e["LD_LIBRARY_PATH"] = app.applicationInfo.nativeLibraryDir
+                e["WB_NODE"] = node.absolutePath
+                e["WB_DSH_HOME"] = home.absolutePath
+                e["npm_config_cache"] = File(home, "npm-cache").absolutePath
+                val p = pb.start()
+                val out = p.inputStream.bufferedReader().readText()
+                p.waitForCompat(180_000)
+                logFile().appendText("\n[pnpm] install exit=${runCatching { p.exitValue() }.getOrDefault(-1)}\n" + out.takeLast(1200) + "\n")
+            }
+        }, "wb-pnpm-bootstrap").apply { isDaemon = true; start() }
+    }
+
+    private fun ensureBinShims(home: File) {
+        runCatching {
+            val bin = File(home, "bin").apply { mkdirs() }
+            val shim = File(app.applicationInfo.nativeLibraryDir, "libwbnode_shim.so")
+            if (!shim.isFile) return
+            for (name in listOf("pnpm", "npm", "node")) {
+                val link = File(bin, name)
+                // 每次启动重建：应用更新后 nativeLibraryDir 路径会变，旧链接会失效
+                runCatching { link.delete() }
+                runCatching { android.system.Os.symlink(shim.absolutePath, link.absolutePath) }
+            }
+        }
+    }
     private fun pickPort(): Int {
         for (i in 0 until PORT_TRIES) {
             val port = PORT_START + i

@@ -211,3 +211,34 @@ cd android && gradle test
     目前提供 `/notify`、`/health`，后续可扩展 `/shell`。
   - **扩展中心（CLI 工具）**：typescript / tsx / prettier / eslint / http-server / nodemon
     一键装到 `home/tools`，其 `.bin` 已加入内核 PATH。
+
+- **3.7.0（2026-10-20）**：修复「DSH 内安装社区插件报错」，内置可执行的 npm/pnpm 入口。
+  - **根因**：DSH 插件安装走 `spawn("pnpm")`，而 App 数据目录在 Android 10+ **禁止 exec**
+    （SELinux `app_data_file`），因此报 `spawn pnpm EACCES`；payload 里自带的 pnpm 又硬编码
+    Termux 前缀 `/data/data/com.termux`，即使能执行也会立刻失败。
+  - **修复**：新增 ELF 启动器 `jniLibs/*/libwbnode_shim.so`（NDK 编译，位于 nativeLibraryDir，
+    允许 exec），按 `argv[0]` 决定运行 `pnpm.mjs` / `npm-cli.js` / node 本体；
+    `home/bin` 里创建 `pnpm`/`npm`/`node` 三个符号链接指向它，并把 `home/bin` 放在内核 PATH 首位。
+    链接每次启动重建（应用更新后 nativeLibraryDir 路径会变）。
+  - **pnpm 运行时**：payload 自带的 Termux pnpm 不可用，改为首次启动用内置 npm 现装
+    `home/pnpmjs/node_modules/pnpm/bin/pnpm.mjs`（后台线程，失败不影响内核）。
+  - 内核环境新增 `WB_NODE`、`WB_DSH_HOME`，供启动器与通知脚本使用。
+  - **真机验证**：`pnpm --version` → 12.14.0；`npm --version` → 11.20.0；
+    在 `dshhome/profiles/web` 里 `pnpm add dsh-cost-meter` 成功（1.4s，装好后已卸载）。
+
+### 工具链（参考项目 19 项系统扩展）现状与路线
+
+已支持：npm 生态 CLI（typescript / tsx / prettier / eslint / http-server / nodemon），
+一键装到 `home/tools`，`.bin` 进入内核 PATH。
+
+未支持（Python / Go / Rust / Clang / OpenJDK / Ruby / PHP / Perl / Lua / SQLite / FFmpeg /
+ImageMagick / OpenSSH / ADB / Vim 等 Termux 包）：**不能直接解包就用**。原因是 Termux 二进制在
+编译期写死前缀 `/data/data/com.termux/files/usr`（DT_RUNPATH 与 CPython 等程序的 sys.prefix 均为绝对路径），
+搬到应用私有目录后既找不到库也找不到自己的资源，且我们的前缀更长、无法原位改写字符串。
+
+要正确实现需要按顺序补三件事：
+1. **bundled patchelf**（NDK 交叉编译）—— 安装时把每个 ELF 的 `DT_RUNPATH`/`DT_NEEDED` 指向新前缀；
+2. **依赖闭包解析** —— 解析 `Packages.xz`（需 xz 解码，可用 commons-compress）得到 `Depends` 递归下载，
+   逐包 SHA-256 校验后原子发布；
+3. **前缀重写** —— 文本/脚本里的 `$PREFIX` 与绝对路径改写，shebang 修复；
+   对 CPython 这类把 prefix 编进二进制的包，需要额外补 `PYTHONHOME`/`--prefix` 起始脚本。

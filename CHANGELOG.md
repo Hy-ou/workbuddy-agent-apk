@@ -5,6 +5,28 @@
 
 ---
 
+## 3.7.0 — 2026-10-20
+
+### 修复：DSH 内安装社区插件报错（`spawn pnpm EACCES`）
+
+- 根因：DSH 插件安装 `spawn("pnpm")`，Android 10+ 禁止执行应用数据目录文件；且 payload 自带 pnpm
+  硬编码 Termux 前缀 `/data/data/com.termux`。
+- 修复：新增 NDK 编译的 ELF 启动器 `libwbnode_shim.so` 放入 jniLibs（nativeLibraryDir 允许 exec），
+  按 `argv[0]` 分发 pnpm.mjs / npm-cli.js / node；`home/bin` 建 `pnpm`/`npm`/`node` 符号链接并置 PATH 首位，
+  每次启动重建；pnpm 运行时首次启动由内置 npm 现装到 `home/pnpmjs`。
+- 内核环境新增 `WB_NODE`、`WB_DSH_HOME`。
+
+### 验证（真机）
+
+- `pnpm --version` → 12.14.0，`npm --version` → 11.20.0。
+- `dshhome/profiles/web` 内 `pnpm add dsh-cost-meter` 成功（1.4s），验证后已卸载。
+- 版本 3.7.0 / versionCode 12；release 111.1 MB。
+
+### 未交付
+
+- 19 项 Termux 系统工具链：需 bundled patchelf + 依赖闭包解析 + 前缀重写，路线写入 README 与发布说明。
+
+---
 ## 3.6.1 — 2026-10-20
 
 ### 修复
