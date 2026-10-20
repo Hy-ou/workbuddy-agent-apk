@@ -1,0 +1,9 @@
+<?xml version="1.0" encoding="utf-8"?>
+<!--
+  Agent 手机操作相关的字符串资源。
+  单独建文件而不是改 strings.xml，避免与其他人同时编辑同一个文件产生冲突。
+-->
+<resources>
+    <!-- 无障碍服务在系统「设置 → 无障碍」列表里的说明文字 -->
+    <string name="wb_accessibility_service_description">允许 WorkBuddy 助手读取当前屏幕上的控件文字，在你授权后代替你点击、输入和滚动。所有操作只在本机进行，不会上传屏幕内容。</string>
+</resources>

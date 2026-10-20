@@ -1,0 +1,16 @@
+<?xml version="1.0" encoding="utf-8"?>
+<!--
+  WorkBuddy 助手无障碍服务配置。
+  - 只订阅「窗口切换 / 窗口内容变化」两类事件，避免无谓唤醒；
+  - flagReportViewIds：读屏时带上控件 id，便于定位；
+  - flagRetrieveInteractiveWindows：允许读取多个窗口（弹窗、输入法等）；
+  - canPerformGestures：坐标点击的兜底手段（MobileTools 里 tapAt）。
+-->
+<accessibility-service xmlns:android="http://schemas.android.com/apk/res/android"
+    android:accessibilityEventTypes="typeWindowStateChanged|typeWindowContentChanged"
+    android:accessibilityFeedbackType="feedbackGeneric"
+    android:accessibilityFlags="flagReportViewIds|flagRetrieveInteractiveWindows"
+    android:canPerformGestures="true"
+    android:canRetrieveWindowContent="true"
+    android:description="@string/wb_accessibility_service_description"
+    android:notificationTimeout="200" />
