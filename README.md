@@ -263,7 +263,29 @@ cd android
 
 ---
 
-## 11. 致谢与许可
+## 11. 安装包
+
+APK 体积约 107 / 117 MB（超出 GitHub 单文件 100 MB 限制），因此**不入库**，作为
+[GitHub Releases](../../releases) 附件发布；仓库里只保留校验值与发布说明。
+
+| 附件 | 大小 | 说明 |
+|---|---|---|
+| `WorkBuddy-3.2.0.apk` | 106.7 MB | 正式包，`adb install -r` 即可 |
+| `WorkBuddy-3.2.0-debug.apk` | 117.4 MB | 调试包（`run-as`、WebView 远程调试） |
+| `SHA256SUMS` | — | 校验值 |
+
+```bash
+# 下载（二选一）
+gh release download v3.2.0 -R <owner>/<repo> -p "*.apk"
+# 或浏览器打开 https://github.com/<owner>/<repo>/releases/latest
+
+sha256sum -c SHA256SUMS
+adb install -r WorkBuddy-3.2.0.apk
+```
+
+发布新版本的流程见 [release/README.md](release/README.md)，上传脚本为
+[tools/publish-release.ps1](tools/publish-release.ps1)（校验 SHA-256 → `gh release create/upload`）。
+## 12. 致谢与许可
 
 - 网关与面板原型：[Sliverkiss/workbuddy2api](https://github.com/Sliverkiss/workbuddy2api)、
   [linguo2625469/workbuddy2api-panel](https://github.com/linguo2625469/workbuddy2api-panel)（MIT）。

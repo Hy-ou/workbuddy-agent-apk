@@ -1,0 +1,2 @@
+# 安装包通过 GitHub Releases 分发，不入库（避免 200 MB+ 仓库与 LFS 流量）
+*.apk
