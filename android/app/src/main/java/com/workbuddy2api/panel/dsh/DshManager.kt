@@ -1,6 +1,7 @@
 package com.workbuddy2api.panel.dsh
 
 import android.app.Application
+import android.net.Uri
 import com.workbuddy2api.panel.util.DeviceEnv
 import android.content.Context
 import kotlinx.coroutines.Dispatchers
@@ -111,6 +112,7 @@ class DshManager private constructor(private val app: Application) {
         } catch (e: Exception) {
             State.Failed(e.message?.takeIf { it.isNotBlank() } ?: "DSH 启动异常")
         }
+        if (result is State.Failed) bumpFailure(result.message) else resetFailures()
         _state.value = result
         result
     }
@@ -127,7 +129,8 @@ class DshManager private constructor(private val app: Application) {
         val kernel = kernelDir()
         val home = homeDir()
         ensureLayout(kernel, home)
-        syncManagedPatch(File(home, "dshhome"))
+        syncManagedPatch(home)
+        val replayed = runCatching { UserPatches.replay(kernel, home) }.getOrDefault(0)
         val node = File(app.applicationInfo.nativeLibraryDir, "libdshnode.so")
         val binjs = File(kernel, "dshroot/lib/node_modules/@deepseek-ai/dsh/lib/bin.js")
         if (!node.isFile) return State.Failed("未找到 node（libdshnode.so），请重新安装 APK")
@@ -268,6 +271,90 @@ class DshManager private constructor(private val app: Application) {
         runCatching { android.os.Process.killProcess(pid) }
         Thread.sleep(250)
     }
+    // ───────────────────────── P2：插件开关 / 安全模式 / 备份 / 我的补丁 ─────────────────────────
+
+    private fun statePrefs() = app.getSharedPreferences("wb_dsh_state", android.content.Context.MODE_PRIVATE)
+
+    private fun bumpFailure(message: String) {
+        val p = statePrefs()
+        val count = p.getInt("fail_count", 0) + 1
+        p.edit().putInt("fail_count", count).putString("last_error", message.take(2000)).apply()
+    }
+
+    private fun resetFailures() {
+        statePrefs().edit().putInt("fail_count", 0).remove("last_error").apply()
+    }
+
+    /** 连续启动失败次数与最后一次错误（供 UI 提示安全模式）。 */
+    fun failureInfo(): Pair<Int, String> {
+        val p = statePrefs()
+        return p.getInt("fail_count", 0) to p.getString("last_error", "").orEmpty()
+    }
+
+    /**
+     * 安全模式：把 profile 用户层整体旁置、用出厂 profile 启动。
+     * 会话/凭证（dshhome 下其它文件）保持不动。
+     */
+    suspend fun startSafeMode(): State = mutex.withLock {
+        val home = homeDir()
+        val profiles = File(home, "dshhome/profiles")
+        val stamp = java.text.SimpleDateFormat("yyyyMMdd-HHmmss", java.util.Locale.US)
+            .format(java.util.Date())
+        runCatching {
+            if (profiles.isDirectory) {
+                profiles.copyRecursively(File(home, "dshhome/profiles.bak-$stamp"), overwrite = true)
+                profiles.deleteRecursively()
+            }
+            restoreProfileFromPayload(File(home, "dshhome/profiles"))
+        }
+        resetFailures()
+        val result = try {
+            withContext(Dispatchers.IO) { doStart() }
+        } catch (e: Exception) {
+            State.Failed(e.message?.takeIf { it.isNotBlank() } ?: "DSH 安全模式启动异常")
+        }
+        if (result is State.Failed) bumpFailure(result.message)
+        _state.value = result
+        result
+    }
+
+    /** 从 payload 重新解压 dshhome/profiles 子树（出厂配置）。 */
+    private fun restoreProfileFromPayload(dest: File) {
+        java.util.zip.ZipInputStream(app.assets.open("payload-dsh.zip")).use { zin ->
+            while (true) {
+                val e = zin.nextEntry ?: break
+                if (!e.name.startsWith("dshhome/profiles/")) { zin.closeEntry(); continue }
+                val f = File(dest, e.name.removePrefix("dshhome/profiles/"))
+                if (!f.canonicalPath.startsWith(dest.canonicalPath)) { zin.closeEntry(); continue }
+                if (e.isDirectory) {
+                    f.mkdirs()
+                } else {
+                    f.parentFile?.mkdirs()
+                    java.io.FileOutputStream(f).use { zin.copyTo(it) }
+                }
+                zin.closeEntry()
+            }
+        }
+    }
+
+    fun plugins(): List<DshPlugins.Plugin> =
+        runCatching { DshPlugins.scan(app, kernelDir(), homeDir()) }.getOrDefault(emptyList())
+
+    fun setPluginDisabled(id: String, disabled: Boolean) = DshPlugins.setUserDisabled(app, id, disabled)
+
+    fun myPatchCount(): Int = runCatching { UserPatches.patchCount(homeDir()) }.getOrDefault(0)
+
+    /** 把当前内核树的用户改动保存为补丁，返回保存文件数。 */
+    fun saveMyPatches(): Int = runCatching { UserPatches.capture(kernelDir(), homeDir()) }.getOrDefault(0)
+
+    /** 清空我的补丁，并让内核树下次启动重新解压（回出厂）。 */
+    fun clearMyPatches() = runCatching { UserPatches.clear(homeDir(), kernelDir()) }
+
+    fun exportBackup(uri: Uri): Result<DshBackup.ExportResult> =
+        DshBackup.export(app, homeDir(), uri)
+
+    fun importBackup(uri: Uri): Result<DshBackup.ImportResult> =
+        DshBackup.import(app, homeDir(), uri)
     private fun pickPort(): Int {
         for (i in 0 until PORT_TRIES) {
             val port = PORT_START + i
@@ -280,28 +367,11 @@ class DshManager private constructor(private val app: Application) {
     }
 
 
-    /** cordis.patch.yml 由本 App 托管：老版本（官方补丁/用户改坏）启动前刷新为干净版。 */
-    private fun syncManagedPatch(root: File) {
-        val target = File(root, "dshhome/cordis.patch.yml")
-        if (target.isFile) {
-            val cur = runCatching { target.readText() }.getOrDefault("")
-            if (cur.contains("WorkBuddy-managed-patch: v2")) return
-        }
-        runCatching {
-            java.util.zip.ZipInputStream(app.assets.open("payload-dsh.zip")).use { zin ->
-                while (true) {
-                    val e = zin.nextEntry ?: break
-                    if (e.name == "dshhome/cordis.patch.yml") {
-                        target.parentFile?.mkdirs()
-                        java.io.FileOutputStream(target).use { zin.copyTo(it) }
-                        zin.closeEntry()
-                        return
-                    }
-                    zin.closeEntry()
-                }
-            }
-        }
+    /** cordis.patch.yml 由本 App 托管：内置策略 + 用户插件开关，每次启动重写。 */
+    private fun syncManagedPatch(home: File) {
+        runCatching { DshPlugins.writePatch(app, home) }
     }
+
     /**
      * 解压内置 payload，按内容分流：
      * dshroot/ 与 bin/ 进只读内核树（可能在外置存储），其余（dshhome/runtime/etc）进内部 home。
@@ -370,6 +440,9 @@ class DshManager private constructor(private val app: Application) {
             kernelMark.writeText("entries=$n")
             homeMark.writeText("entries=$n")
         }
+
+        // 首次解压后记录出厂基线（供「我的补丁」比对）
+        runCatching { UserPatches.ensureBaseline(kernel, home) }
     }
 
     /** 移动目录/文件（跨存储用复制+删除，同存储优先 rename）。 */

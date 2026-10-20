@@ -163,6 +163,13 @@ fun DshScreen(manager: DshManager, gatewayApiKey: String = "") {
                     primary = true,
                     modifier = Modifier.fillMaxWidth(),
                 )
+                Spacer(Modifier.height(8.dp))
+                // 连续失败时提供安全模式：用出厂 profile 启动，保留会话与凭证
+                WbButton(
+                    text = "以安全模式启动（出厂配置）",
+                    onClick = { scope.launch { manager.startSafeMode() } },
+                    modifier = Modifier.fillMaxWidth(),
+                )
             }
             else -> DshIdleCard(manager)
         }

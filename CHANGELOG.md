@@ -5,6 +5,25 @@
 
 ---
 
+## 3.4.0 — 2026-10-20
+
+### 新增：P2 宿主能力
+
+- **插件开关**（`dsh/DshPlugins.kt`）：扫描 `@deepseek-ai/dsh-*` 包，UI 逐个开关；
+  `cordis.patch.yml` 由 App 每次启动重写（`WorkBuddy-managed-patch: v3`），内置策略仍不可关。
+- **安全模式**（`DshManager.startSafeMode`）：`dshhome/profiles` 旁置 + 从 payload 恢复出厂 profile，
+  保留会话/凭证；记录连续失败次数与最后错误；DSH 失败页与设置页双入口。
+- **备份/还原**（`dsh/DshBackup.kt`）：SAF 导出/导入 zip（dshhome、助手会话、网关配置、我的补丁），
+  导入前自动备份现有数据。
+- **我的补丁**（`dsh/UserPatches.kt`）：内核树 sha256 基线 + 改动捕获 + 启动回放 + 一键回出厂。
+- 新增 `DshPluginIdTest`。
+
+### 验证
+
+- 真机：patch v3 生成、`.baseline.tsv`（4.8 MB）生成、内核正常启动。
+- `testDebugUnitTest` + `lintDebug` 通过；release APK 106.8 MB。
+
+---
 ## 3.3.0 — 2026-10-20
 
 ### 新增：宿主层能力补齐（参考 deepseek-harness-android-app）

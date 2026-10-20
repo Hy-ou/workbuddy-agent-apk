@@ -184,3 +184,17 @@ cd android && gradle test
     旧合并树首次启动自动拆分迁移。
   - **运行体检卡片**：设置页聚合电池白名单 / WebView 版本 / ABI / 内核树位置 / 版本更新。
   - 单测新增 `EnvAndUpdateTest`（版本比较、UA 解析）。
+
+- **3.4.0（2026-10-20）**：P2 宿主能力（插件开关 / 安全模式 / 备份 / 我的补丁）。
+  - **插件开关**（`dsh/DshPlugins.kt`）：扫描内核树里的 `@deepseek-ai/dsh-*` 包，
+    在「设置 → DSH 工具」逐个启用/禁用；`cordis.patch.yml` 改为每次启动由 App 重写
+    （`WorkBuddy-managed-patch: v3`），内置策略（sandbox/office-to-pdf/遥测）不可关。
+  - **安全模式**（`DshManager.startSafeMode`）：连续启动失败时，把 `dshhome/profiles` 旁置并
+    从 payload 恢复出厂 profile 再启动，会话/凭证不动；DSH 失败页与设置页都有入口。
+    失败次数与最后一次错误记录在 `wb_dsh_state`。
+  - **备份 / 还原**（`dsh/DshBackup.kt`）：经 SAF 导出/导入 zip，内容含 `dshhome`（跳过日志）、
+    原生助手会话、网关配置、我的补丁；导入前自动把现有 `dshhome` 备份为 `dshhome.bak-<时间>`。
+  - **我的补丁**（`dsh/UserPatches.kt`）：首次解压记录 `dshroot` 全量 sha256 基线（约 4.8 MB），
+    「保存修改为补丁」把与出厂不同的文本/配置/图片（单个 ≤8 MB）存入 `user-patch/`，
+    启动前自动回放；「清空补丁」删除补丁并让内核树重新解压。
+  - 新增单测 `DshPluginIdTest`（包名 → 插件 id 映射、内置禁用策略）。
