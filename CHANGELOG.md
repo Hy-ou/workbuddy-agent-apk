@@ -5,6 +5,17 @@
 
 ---
 
+## 3.6.1 — 2026-10-20
+
+### 修复
+
+- DSH 侧通知从「插件 insert」改为「node 脚本 + `WB_NOTIFY`/`WB_BRIDGE_TOKEN` 环境变量」：
+  上游解析器只认自带作用域的插件包，第三方包 insert 会报 `Cannot find package`。
+- 真机验证：`POST http://127.0.0.1:7865/notify` 返回 `{"ok":true}`，
+  通知栏出现 `wb_agent_notify` 渠道通知。
+- 版本 3.6.1 / versionCode 11。
+
+---
 ## 3.6.0 — 2026-10-20
 
 ### 新增

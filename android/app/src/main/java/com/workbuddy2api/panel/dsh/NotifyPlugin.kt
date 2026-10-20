@@ -11,7 +11,7 @@ import java.io.File
 object NotifyPlugin {
 
     const val ID = "wb-notify"
-    const val PACKAGE = "@workbuddy/dsh-tool-notify"
+    const val PACKAGE = "@deepseek-ai/dsh-tool-notify"
     private const val VERSION = "1.0.0"
 
     private val INDEX_JS = """
@@ -81,5 +81,5 @@ export function apply(ctx) {
     }.getOrDefault(false)
 
     fun packageDir(kernelDir: File): File =
-        File(kernelDir, "dshroot/lib/node_modules/@deepseek-ai/dsh/node_modules/@workbuddy/dsh-tool-notify")
+        File(kernelDir, "dshroot/lib/node_modules/@deepseek-ai/dsh/node_modules/@deepseek-ai/dsh-tool-notify")
 }

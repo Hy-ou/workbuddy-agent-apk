@@ -131,10 +131,9 @@ class DshManager private constructor(private val app: Application) {
         ensureLayout(kernel, home)
         // 宿主回环桥（插件发通知等）；失败不影响内核启动
         runCatching { LocalBridge.start(app) }
-        // 内置 notify 插件：写入内核 node_modules 并登记到 patch 的 insert 列表
-        if (runCatching { NotifyPlugin.ensure(kernel) }.getOrDefault(false)) {
-            InstalledPlugins.add(app, NotifyPlugin.ID, NotifyPlugin.PACKAGE)
-        }
+        // 内核命令 notify（走回环桥发通知）；清掉旧版本尝试过的插件登记
+        val notifyScript = runCatching { NotifyCli.ensure(app, home) }.getOrNull()
+        runCatching { InstalledPlugins.remove(app, NotifyPlugin.PACKAGE) }
         syncManagedPatch(home)
         val replayed = runCatching { UserPatches.replay(kernel, home) }.getOrDefault(0)
         val node = File(app.applicationInfo.nativeLibraryDir, "libdshnode.so")
@@ -163,6 +162,7 @@ class DshManager private constructor(private val app: Application) {
         env["TERM"] = "xterm"
         env["SHELL"] = "/system/bin/sh"
         env["WB_BRIDGE_TOKEN"] = LocalBridge.token(app)
+        notifyScript?.let { env["WB_NOTIFY"] = it.absolutePath }
         env["PATH"] = listOf(
             File(home, "tools/node_modules/.bin").absolutePath,
             File(kernel, "bin").absolutePath,
