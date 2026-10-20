@@ -276,8 +276,8 @@ APK 体积约 107 / 117 MB（超出 GitHub 单文件 100 MB 限制），因此**
 
 ```bash
 # 下载（二选一）
-gh release download v3.2.0 -R <owner>/<repo> -p "*.apk"
-# 或浏览器打开 https://github.com/<owner>/<repo>/releases/latest
+gh release download v3.2.0 -R Hy-ou/workbuddy-agent-apk -p "*.apk"
+# 或浏览器打开 https://github.com/Hy-ou/workbuddy-agent-apk/releases/latest
 
 sha256sum -c SHA256SUMS
 adb install -r WorkBuddy-3.2.0.apk

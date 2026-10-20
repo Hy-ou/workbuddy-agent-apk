@@ -11,19 +11,19 @@ APK 体积约 107 / 117 MB，超出 git 仓库的合理承载（GitHub 单文件
 
 ## 下载
 
-**浏览器**：`https://github.com/<owner>/<repo>/releases/latest`
+**浏览器**：`https://github.com/Hy-ou/workbuddy-agent-apk/releases/latest`
 
 **GitHub CLI**
 
 ```bash
-gh release download v3.2.0 -R <owner>/<repo> -p "*.apk"
-gh release download v3.2.0 -R <owner>/<repo> -p "SHA256SUMS"
+gh release download v3.2.0 -R Hy-ou/workbuddy-agent-apk -p "*.apk"
+gh release download v3.2.0 -R Hy-ou/workbuddy-agent-apk -p "SHA256SUMS"
 ```
 
 **curl（公开仓库，无需登录）**
 
 ```bash
-BASE=https://github.com/<owner>/<repo>/releases/download/v3.2.0
+BASE=https://github.com/Hy-ou/workbuddy-agent-apk/releases/download/v3.2.0
 curl -LO $BASE/WorkBuddy-3.2.0.apk
 curl -LO $BASE/WorkBuddy-3.2.0-debug.apk
 curl -LO $BASE/SHA256SUMS
@@ -59,7 +59,7 @@ debug 包与 release 包同签名，可互相覆盖安装，无需卸载。
 3. 打 tag 并上传附件：
 
    ```powershell
-   pwsh tools/publish-release.ps1 -Tag v3.2.0 -Repo <owner>/<repo>
+   pwsh tools/publish-release.ps1 -Tag v3.2.0 -Repo Hy-ou/workbuddy-agent-apk
    ```
 
    脚本会先校验 SHA-256，再调用 `gh release create/upload`；没有 `gh` 时会打印等价的 `curl` 命令。
