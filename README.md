@@ -141,7 +141,8 @@ workbuddy-agent-apk/
 ├── CHANGELOG.md                  ← 版本开发记录
 ├── docs/
 │   ├── architecture.md           ← 架构与关键实现
-│   └── troubleshooting.md        ← 真机问题排查与修复记录
+│   ├── troubleshooting.md        ← 真机问题排查与修复记录
+│   └── upstream-integration.md   ← 参考项目的可整合功能评估
 ├── THIRD_PARTY.md                ← 第三方组件与许可
 └── android/
     ├── build_gateway.ps1         ← Go 网关交叉编译脚本
