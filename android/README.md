@@ -168,3 +168,19 @@ cd android && gradle test
   - DSH 工作区：授权后 `DSH_WORKSPACE` 切换为共享目录
     `/storage/emulated/0/WorkBuddy`（bash、文件、检索工具可直接读写手机文件），
     未授权时退回应用专属目录。已在运行的内核需重启一次生效。
+
+- **3.3.0（2026-10-20）**：宿主层能力补齐（参考 deepseek-harness-android-app）。
+  - **系统 CA 合成**：启动前把 `/system/etc/security/cacerts/*` 合并为 `runtime/etc/cacert-system.pem`
+    （带 stamp 缓存），`SSL_CERT_FILE` 优先用它，企业代理/自签 CA 可用；失败回退内置 Mozilla bundle。
+  - **WebView 兼容自检**：读取 Chromium 主版本，低于 80 时在 DSH 页提示（仍启用视口修复）；
+    「设置 → 运行环境」展示版本与 ABI。
+  - **状态栏跟随页面底色**：新增 `wbshell.onBg` JS 桥 + `MutationObserver`，DSH 控制台切换深/浅主题时
+    状态栏/导航栏图标与底色同步（Android 11+ 用 `setSystemBarsAppearance`）。
+  - **电池优化白名单**：`REQUEST_IGNORE_BATTERY_OPTIMIZATIONS` + 一键跳系统页，状态在运行体检里展示。
+  - **更新检查**：读取 GitHub Release latest 与本地版本比较，提供下载入口（不静默安装）。
+  - **内核树拆分布局**：`dshroot/`、`bin/` 外置到 `/storage/emulated/0/WorkBuddy/dsh`（省内部存储），
+    `dshhome/`、`runtime/`、凭证与日志留在内部 `filesDir/dsh-home`——因为 stores 会 `chmod 600`，
+    而 `/sdcard` 的 FUSE 不支持 chmod/所有权（实测外置 home 会导致 credentials 插件拒绝启动）。
+    旧合并树首次启动自动拆分迁移。
+  - **运行体检卡片**：设置页聚合电池白名单 / WebView 版本 / ABI / 内核树位置 / 版本更新。
+  - 单测新增 `EnvAndUpdateTest`（版本比较、UA 解析）。

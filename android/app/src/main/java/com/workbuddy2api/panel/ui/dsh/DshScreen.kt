@@ -32,6 +32,7 @@ import androidx.compose.material3.rememberModalBottomSheetState
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.getValue
+import androidx.compose.runtime.mutableIntStateOf
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
 import androidx.compose.runtime.rememberCoroutineScope
@@ -39,6 +40,7 @@ import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.platform.LocalClipboardManager
+import androidx.compose.ui.platform.LocalView
 import androidx.compose.ui.text.AnnotatedString
 import androidx.compose.ui.text.font.FontFamily
 import androidx.compose.ui.unit.dp
@@ -70,7 +72,9 @@ fun DshScreen(manager: DshManager, gatewayApiKey: String = "") {
     val state by manager.state.collectAsStateWithLifecycle()
     var showLogs by remember { mutableStateOf(false) }
     var showInfo by remember { mutableStateOf(false) }
-
+    // WebView 兼容自检（Chromium 版本）与页面底色（状态栏跟随）
+    var chromeMajor by remember { mutableIntStateOf(0) }
+    var pageBg by remember { mutableStateOf<Int?>(null) }
     // 进入 DSH 页即自动拉起内核（未运行时），省掉一次点击。
     LaunchedEffect(Unit) {
         val cur = manager.state.value
@@ -102,8 +106,14 @@ fun DshScreen(manager: DshManager, gatewayApiKey: String = "") {
             },
         )
         AllFilesAccessBanner()
+        DshChromeCompatBanner(chromeMajor)
+        ApplyPageBackgroundToSystemBars(pageBg)
         when (val s = state) {
-            is State.Running -> DshWebView(manager = manager)
+            is State.Running -> DshWebView(
+                manager = manager,
+                onChromeMajor = { chromeMajor = it },
+                onPageBg = { pageBg = it },
+            )
             is State.Extracting -> Column(
                 Modifier.fillMaxSize().padding(24.dp),
                 horizontalAlignment = Alignment.CenterHorizontally,
@@ -280,7 +290,11 @@ private fun InfoCopyRow(label: String, value: String, onCopy: () -> Unit) {
 
 @SuppressLint("SetJavaScriptEnabled")
 @Composable
-private fun DshWebView(manager: DshManager) {
+private fun DshWebView(
+    manager: DshManager,
+    onChromeMajor: (Int) -> Unit = {},
+    onPageBg: (Int?) -> Unit = {},
+) {
     val wb = LocalWbColors.current
     // DSH 的 token URL 是一次性的，只能加载一次；重复加载会显示
     // "dsh web authentication required"。首次加载换签名 cookie，之后走 base URL。
@@ -343,6 +357,7 @@ private fun DshWebView(manager: DshManager) {
                         Log.i(TAG_WEB, "pageFinished url=$url title=${view?.title}")
                         manager.markTokenConsumed()
                         injectViewportFix(view)
+                        runCatching { view?.evaluateJavascript(BG_JS, null) }
                     }
 
                     override fun onReceivedHttpError(
@@ -398,6 +413,24 @@ private fun DshWebView(manager: DshManager) {
                 }
                 if (com.workbuddy2api.panel.BuildConfig.DEBUG) {
                     WebView.setWebContentsDebuggingEnabled(true)
+                }
+                // WebView 兼容自检：把 Chromium 主版本回传给 UI
+                runCatching {
+                    onChromeMajor(
+                        com.workbuddy2api.panel.util.DeviceEnv.chromeMajor(settings.userAgentString),
+                    )
+                }
+                // 页面 → 壳：底色上报（状态栏/导航栏跟随 DSH 主题）
+                runCatching {
+                    addJavascriptInterface(
+                        object {
+                            @android.webkit.JavascriptInterface
+                            fun onBg(css: String) {
+                                runCatching { onPageBg(parseCssColor(css)) }
+                            }
+                        },
+                        "wbshell",
+                    )
                 }
                 // 等 WebView 真正有尺寸后再加载，避免 0x0 时初始化渲染视口。
                 var loaded = false
@@ -497,4 +530,115 @@ private fun injectViewportFix(view: WebView?) {
         view.evaluateJavascript(VH_FIX_JS, null)
         view.postDelayed({ runCatching { view.evaluateJavascript("window.__wbVhFix&&window.__wbVhFix()", null) } }, 1200)
     }
+}
+/** WebView 页面底色观察：把 body/documentElement 的实际背景色回传给壳。 */
+private const val BG_JS = """
+(function(){
+  if (window.__wbBg) return;
+  window.__wbBg = 1;
+  function opaque(s){ return !!s && !/rgba?\([^)]*,\s*0\s*\)/.test(s); }
+  function cur(){
+    var b = ''; try { b = getComputedStyle(document.body).backgroundColor || ''; } catch(e) {}
+    if (opaque(b)) return b;
+    var h = ''; try { h = getComputedStyle(document.documentElement).backgroundColor || ''; } catch(e) {}
+    return opaque(h) ? h : b;
+  }
+  function push(){ try { if (window.wbshell && wbshell.onBg) wbshell.onBg(cur()); } catch(e) {} }
+  var t = null;
+  function soon(){ if (t) return; t = setTimeout(function(){ t = null; push(); }, 250); }
+  try {
+    new MutationObserver(soon).observe(document.documentElement, {
+      attributes: true, attributeFilter: ['class', 'style', 'data-theme', 'color-scheme'],
+    });
+  } catch(e) {}
+  document.addEventListener('transitionend', soon, true);
+  push(); setTimeout(push, 800); setTimeout(push, 2500);
+})();
+"""
+
+/** 解析 `rgb()/rgba()/#rrggbb` 形式的 CSS 颜色。 */
+private fun parseCssColor(css: String?): Int? {
+    if (css.isNullOrBlank()) return null
+    val s = css.trim().lowercase()
+    if (s.startsWith("#")) {
+        val hex = s.removePrefix("#")
+        return when (hex.length) {
+            6 -> runCatching { (0xFF000000 or hex.toLong(16)).toInt() }.getOrNull()
+            8 -> runCatching { hex.toLong(16).toInt() }.getOrNull()
+            3 -> runCatching {
+                val r = hex[0].toString().repeat(2)
+                val g = hex[1].toString().repeat(2)
+                val b = hex[2].toString().repeat(2)
+                (0xFF000000 or ("$r$g$b").toLong(16)).toInt()
+            }.getOrNull()
+            else -> null
+        }
+    }
+    val m = Regex("""rgba?\(\s*(\d+)\s*,\s*(\d+)\s*,\s*(\d+)""").find(s) ?: return null
+    val (r, g, b) = m.destructured
+    return android.graphics.Color.rgb(r.toInt(), g.toInt(), b.toInt())
+}
+
+/** Chromium 版本过低时的提示（DSH 前端要求 80+）。 */
+@Composable
+private fun DshChromeCompatBanner(chromeMajor: Int) {
+    val wb = LocalWbColors.current
+    if (chromeMajor <= 0 || chromeMajor >= com.workbuddy2api.panel.util.DeviceEnv.MIN_CHROME_FOR_DSH) return
+    Row(
+        Modifier.fillMaxWidth().padding(horizontal = 12.dp, vertical = 6.dp),
+        verticalAlignment = Alignment.CenterVertically,
+    ) {
+        Text(
+            "WebView 内核 Chromium $chromeMajor 偏旧（建议 80+），控制台可能显示异常；" +
+                "已自动启用视口修复。",
+            style = MaterialTheme.typography.labelSmall,
+            color = wb.warn,
+            modifier = Modifier.weight(1f),
+        )
+    }
+}
+
+/** 让状态栏/导航栏跟随 DSH 页面底色（浅色底用深色图标）。 */
+@Composable
+private fun ApplyPageBackgroundToSystemBars(bg: Int?) {
+    val view = LocalView.current
+    LaunchedEffect(bg) {
+        val color = bg ?: return@LaunchedEffect
+        val activity = view.context as? android.app.Activity ?: return@LaunchedEffect
+        val window = activity.window
+        val light = isLightColor(color)
+        runCatching {
+            if (android.os.Build.VERSION.SDK_INT >= android.os.Build.VERSION_CODES.R) {
+                window.insetsController?.setSystemBarsAppearance(
+                    if (light) {
+                        android.view.WindowInsetsController.APPEARANCE_LIGHT_STATUS_BARS or
+                            android.view.WindowInsetsController.APPEARANCE_LIGHT_NAVIGATION_BARS
+                    } else {
+                        0
+                    },
+                    android.view.WindowInsetsController.APPEARANCE_LIGHT_STATUS_BARS or
+                        android.view.WindowInsetsController.APPEARANCE_LIGHT_NAVIGATION_BARS,
+                )
+            } else {
+                @Suppress("DEPRECATION")
+                window.statusBarColor = color
+                @Suppress("DEPRECATION")
+                window.navigationBarColor = color
+                @Suppress("DEPRECATION")
+                window.decorView.systemUiVisibility = if (light) {
+                    android.view.View.SYSTEM_UI_FLAG_LIGHT_STATUS_BAR
+                } else {
+                    0
+                }
+            }
+        }
+    }
+}
+
+private fun isLightColor(color: Int): Boolean {
+    val r = (color shr 16) and 0xFF
+    val g = (color shr 8) and 0xFF
+    val b = color and 0xFF
+    val y = (0.299 * r + 0.587 * g + 0.114 * b)
+    return y > 160
 }

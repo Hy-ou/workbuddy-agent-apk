@@ -239,6 +239,7 @@ adb shell am start -n com.workbuddy2api.panel/.MainActivity --ei tab 2 --es mode
 | 3.0.0 | 以独立 Node 进程接入 DSH 内核（jniLibs + ELF 补丁 + 资产包 + WebView） |
 | 3.1.0 | WebView 交互修复（`vh=0` 视口塌陷）、助手引擎切换移入设置 |
 | 3.2.0 | 申请「所有文件访问」，DSH 工作区落到共享存储 |
+| 3.3.0 | 宿主层增强：系统 CA、WebView 自检、状态栏跟随、电池白名单、更新检查、内核树拆分外置、运行体检 |
 
 ---
 

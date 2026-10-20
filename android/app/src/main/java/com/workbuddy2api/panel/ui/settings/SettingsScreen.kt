@@ -52,7 +52,7 @@ private val REFRESH_LABELS = listOf("3s", "5s", "10s", "30s")
 private val REFRESH_SECONDS = listOf(3, 5, 10, 30)
 
 /** 应用自身版本号（与 build.gradle.kts 的 versionName 保持一致）。 */
-private const val APP_VERSION = "3.2.0"
+private const val APP_VERSION = "3.3.0"
 
 /**
  * 设置页：连接信息 / 外观 / 刷新间隔 / 二级功能入口 / 关于。
@@ -171,6 +171,11 @@ fun SettingsScreen(
             // ── 文件访问 ────────────────────────────────────────────
             SectionHeader(title = "文件访问", subtitle = "DSH 内核检索、操作手机文件所需")
             AllFilesAccessCard()
+
+            Spacer(Modifier.height(WbDimens.gap))
+            // ── 运行体检 ────────────────────────────────────────────
+            SectionHeader(title = "运行环境", subtitle = "电池白名单、WebView、架构与内核位置")
+            DiagnosticsCard()
 
             Spacer(Modifier.height(WbDimens.gap))
             // ── 助手引擎 ────────────────────────────────────────────

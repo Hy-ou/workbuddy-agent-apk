@@ -30,6 +30,7 @@ import androidx.compose.material3.SnackbarHostState
 import androidx.compose.material3.Text
 import androidx.compose.material3.rememberModalBottomSheetState
 import androidx.compose.runtime.Composable
+import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.CompositionLocalProvider
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableIntStateOf
@@ -90,6 +91,11 @@ fun AppShell(vm: AppViewModel, session: Session, repo: WbRepository, initialTab:
     val wb = LocalWbColors.current
     val snackbar = remember { SnackbarHostState() }
     var tab by rememberSaveable { mutableIntStateOf(initialTab.coerceIn(0, tabs.size - 1)) }
+    // 调试直达：带 tab/mode extra 启动时（如 adb am start --ei tab 2）强制切到目标页，
+    // 否则 rememberSaveable 会恢复上一次的 Tab。
+    LaunchedEffect(Unit) {
+        if (initialTab != 0 || initialMode.isNotBlank()) tab = initialTab.coerceIn(0, tabs.size - 1)
+    }
     var route by rememberSaveable { mutableStateOf(Route.Main) }
     var showGatewayLogs by remember { mutableStateOf(false) }
 

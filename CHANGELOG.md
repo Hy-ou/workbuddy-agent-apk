@@ -5,6 +5,27 @@
 
 ---
 
+## 3.3.0 — 2026-10-20
+
+### 新增：宿主层能力补齐（参考 deepseek-harness-android-app）
+
+- **系统 CA 合成**（`dsh/SystemCaBundle.kt`）：把 `/system/etc/security/cacerts/*` 合并为
+  `runtime/etc/cacert-system.pem`（stamp 缓存），`SSL_CERT_FILE` 优先使用，企业代理/自签 CA 可用。
+- **WebView 兼容自检**：读取 Chromium 主版本，<80 时在 DSH 页提示；「运行环境」展示版本与 ABI。
+- **状态栏跟随页面底色**：`wbshell.onBg` JS 桥 + `MutationObserver`，控制台切换主题时系统栏同步。
+- **电池优化白名单**：新增权限与一键跳转，状态在运行体检中展示。
+- **更新检查**（`util/UpdateChecker.kt`）：GitHub Release latest 与本地版本比较，提供下载入口。
+- **内核树拆分布局**：`dshroot/`、`bin/` 外置到 `/storage/emulated/0/WorkBuddy/dsh`；
+  `dshhome/`、`runtime/`、凭证与日志留在内部 `filesDir/dsh-home`（`/sdcard` 不支持 `chmod`，
+  实测外置 home 会让 `dsh-credentials-local` 拒绝启动）。旧合并树首启自动拆分迁移。
+- **运行体检卡片**：设置页聚合电池白名单 / WebView / ABI / 内核树位置 / 版本更新。
+- 修复：迁移前先结束遗留 node（否则其 cwd 指向旧目录导致删不掉旧树）；带 `tab/mode` extra 启动时强制切页。
+
+### 验证
+
+- `testDebugUnitTest`（新增 `EnvAndUpdateTest`）+ `lintDebug` 通过；release APK 106.8 MB。
+
+---
 ## 3.2.0 — 2026-10-20
 
 ### 新增：所有文件访问

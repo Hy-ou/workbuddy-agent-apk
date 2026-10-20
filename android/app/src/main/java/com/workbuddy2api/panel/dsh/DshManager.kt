@@ -1,6 +1,7 @@
 package com.workbuddy2api.panel.dsh
 
 import android.app.Application
+import com.workbuddy2api.panel.util.DeviceEnv
 import android.content.Context
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.flow.MutableStateFlow
@@ -58,7 +59,32 @@ class DshManager private constructor(private val app: Application) {
     @Volatile private var tokenUrl: String? = null
     @Volatile private var tokenConsumed: Boolean = false
 
-    fun rootDir(): File = File(app.filesDir, "dsh").apply { mkdirs() }
+    /**
+     * 只读内核树（dshroot / bin）根目录。
+     *
+     * 拿到「所有文件访问」时外置到 /storage/emulated/0/WorkBuddy/dsh，省内部存储；
+     * 否则退回内部 filesDir/dsh-kernel。
+     */
+    fun kernelDir(): File {
+        val internal = File(app.filesDir, "dsh-kernel")
+        if (!StorageAccess.hasAllFilesAccess(app)) return internal.apply { mkdirs() }
+        val shared = File(File(StorageAccess.sharedRoot(), StorageAccess.sharedWorkspaceName()), "dsh")
+        if (runCatching { shared.mkdirs() }.isSuccess || shared.isDirectory) return shared
+        return internal.apply { mkdirs() }
+    }
+
+    /**
+     * 用户态目录（dshhome / runtime / 凭证 / 日志）——必须留在内部存储：
+     * DSH 的 credentials-local 会 chmod 600，而 /sdcard 的 FUSE 不支持 chmod/所有权。
+     */
+    fun homeDir(): File = File(app.filesDir, "dsh-home").apply { mkdirs() }
+
+    /** 内核树位置（设置页展示用）。 */
+    fun kernelRootPath(): String = kernelDir().absolutePath
+
+    /** 内核树是否位于共享存储。 */
+    fun kernelOnSharedStorage(): Boolean =
+        kernelDir().absolutePath.startsWith(StorageAccess.sharedRoot().absolutePath)
     fun logFile(): File = File(app.filesDir, "dsh-web.log")
     fun isRunning(): Boolean = process != null && _state.value is State.Running
 
@@ -75,7 +101,7 @@ class DshManager private constructor(private val app: Application) {
     fun markTokenConsumed() { tokenConsumed = true }
 
     /** 已解压标记（含条目数与耗时），null 表示首启还需解压。 */
-    fun extractedInfo(): String? = File(rootDir(), EXTRACTED_MARK).takeIf { it.isFile }?.readText()
+    fun extractedInfo(): String? = File(kernelDir(), EXTRACTED_MARK).takeIf { it.isFile }?.readText()
 
     suspend fun start(): State = mutex.withLock {
         val cur = _state.value
@@ -90,20 +116,22 @@ class DshManager private constructor(private val app: Application) {
     }
 
     private fun doStart(): State {
-        val root = rootDir()
-        val mark = File(root, EXTRACTED_MARK)
-        if (!mark.isFile) {
-            _state.value = State.Extracting(0)
-            val n = extractPayload(root)
-            mark.writeText("entries=$n ms-marker")
+        if (!DeviceEnv.supportsDsh()) {
+            return State.Failed(
+                "当前设备架构为 ${DeviceEnv.abiSummary()}：内置 Node 运行时只提供 arm64，" +
+                    "DSH 内核不可用；网关与原生助手仍可正常使用。",
+            )
         }
-        syncManagedPatch(root)
+        // 先结束上一次的 node（否则它的 cwd 还指着旧目录，迁移后删不掉旧树）
+        killStaleNode()
+        val kernel = kernelDir()
+        val home = homeDir()
+        ensureLayout(kernel, home)
+        syncManagedPatch(File(home, "dshhome"))
         val node = File(app.applicationInfo.nativeLibraryDir, "libdshnode.so")
-        val binjs = File(root, "dshroot/lib/node_modules/@deepseek-ai/dsh/lib/bin.js")
+        val binjs = File(kernel, "dshroot/lib/node_modules/@deepseek-ai/dsh/lib/bin.js")
         if (!node.isFile) return State.Failed("未找到 node（libdshnode.so），请重新安装 APK")
         if (!binjs.isFile) return State.Failed("内核树不完整（缺少 bin.js），请清除应用数据重试")
-
-        killStaleNode()
 
         val log = logFile()
         rotateLogIfNeeded(log)
@@ -115,25 +143,28 @@ class DshManager private constructor(private val app: Application) {
             node.absolutePath, "--expose-internals", binjs.absolutePath,
             "web", "--host", "127.0.0.1", "--port", port.toString(), "--no-open",
         )
-        pb.directory(root)
+        pb.directory(home)
         pb.redirectErrorStream(true)
         val env = pb.environment()
         env["LD_LIBRARY_PATH"] = app.applicationInfo.nativeLibraryDir
         env["HOME"] = app.filesDir.absolutePath
-        env["DSH_HOME"] = File(root, "dshhome").absolutePath
+        env["DSH_HOME"] = File(home, "dshhome").absolutePath
         env["DSH_WORKSPACE"] = workspaceDir().absolutePath
         env["TMPDIR"] = app.cacheDir.absolutePath
         env["TERM"] = "xterm"
         env["SHELL"] = "/system/bin/sh"
         env["PATH"] = listOf(
-            File(root, "bin").absolutePath,
+            File(kernel, "bin").absolutePath,
             app.applicationInfo.nativeLibraryDir,
             "/system/bin", "/system/xbin",
         ).joinToString(":")
-        env["SSL_CERT_FILE"] = File(root, "runtime/etc/cacert.pem")
-            .takeIf { it.isFile }?.absolutePath ?: File(app.filesDir, "gateway/cacert.pem")
-            .takeIf { it.isFile }?.absolutePath ?: ""
-        env["OPENSSL_CONF"] = File(root, "runtime/etc/openssl.cnf").absolutePath
+        // 优先用系统证书合成的 bundle（企业代理/自签 CA 可用），其次 payload 自带的 Mozilla 根证书。
+        val sysCa = SystemCaBundle.ensure(app, File(home, "runtime/etc"))
+        env["SSL_CERT_FILE"] = sysCa?.absolutePath
+            ?: File(home, "runtime/etc/cacert.pem").takeIf { it.isFile }?.absolutePath
+            ?: File(app.filesDir, "gateway/cacert.pem").takeIf { it.isFile }?.absolutePath
+            ?: ""
+        env["OPENSSL_CONF"] = File(home, "runtime/etc/openssl.cnf").absolutePath
         env["GIT_CONFIG_NOSYSTEM"] = "1"
         env["GIT_PAGER"] = "cat"
 
@@ -208,7 +239,7 @@ class DshManager private constructor(private val app: Application) {
      */
     fun workspaceDir(): File {
         if (StorageAccess.hasAllFilesAccess(app)) {
-            val shared = File(StorageAccess.sharedRoot(), StorageAccess.sharedWorkspaceName())
+            val shared = File(File(StorageAccess.sharedRoot(), StorageAccess.sharedWorkspaceName()), "workspace")
             if (runCatching { shared.mkdirs() }.isSuccess || shared.isDirectory) return shared
         }
         return File(app.getExternalFilesDir(null) ?: app.filesDir, "workspace").apply { mkdirs() }
@@ -271,15 +302,23 @@ class DshManager private constructor(private val app: Application) {
             }
         }
     }
-    private fun extractPayload(root: File): Int {
+    /**
+     * 解压内置 payload，按内容分流：
+     * dshroot/ 与 bin/ 进只读内核树（可能在外置存储），其余（dshhome/runtime/etc）进内部 home。
+     */
+    private fun extractPayload(kernel: File, home: File): Int {
         var n = 0
         java.util.zip.ZipInputStream(app.assets.open("payload-dsh.zip")).use { zin ->
             while (true) {
                 val e = zin.nextEntry ?: break
-                val f = File(root, e.name)
-                val clean = f.canonicalPath.startsWith(root.canonicalPath)
+                val isKernel = e.name.startsWith("dshroot/") || e.name.startsWith("bin/")
+                val base = if (isKernel) kernel else home
+                val f = File(base, e.name)
+                val clean = f.canonicalPath.startsWith(base.canonicalPath)
                 if (!clean) { zin.closeEntry(); continue }   // 防路径穿越
-                if (e.isDirectory) { f.mkdirs() } else {
+                if (e.isDirectory) {
+                    f.mkdirs()
+                } else {
                     f.parentFile?.mkdirs()
                     java.io.FileOutputStream(f).use { zin.copyTo(it) }
                 }
@@ -290,6 +329,64 @@ class DshManager private constructor(private val app: Application) {
         return n
     }
 
+    /** 确保内核树/用户态目录就位：拆分迁移旧合并树、清掉残留、缺文件则解压。 */
+    private fun ensureLayout(kernel: File, home: File) {
+        val kernelMark = File(kernel, EXTRACTED_MARK)
+        val homeMark = File(home, EXTRACTED_MARK)
+
+        // 1) 旧版「合并树」filesDir/dsh → 拆分到 kernel/home
+        val legacy = File(app.filesDir, "dsh")
+        if (legacy.isDirectory && File(legacy, EXTRACTED_MARK).isFile) {
+            _state.value = State.Extracting(0)
+            moveInto(File(legacy, "dshroot"), File(kernel, "dshroot"))
+            moveInto(File(legacy, "bin"), File(kernel, "bin"))
+            moveInto(File(legacy, "runtime"), File(home, "runtime"))
+            moveInto(File(legacy, "dshhome"), File(home, "dshhome"))
+            moveInto(File(legacy, "PAYLOAD-MANIFEST.json"), File(home, "PAYLOAD-MANIFEST.json"))
+            if (!kernelMark.isFile) kernelMark.writeText("migrated")
+            if (!homeMark.isFile) homeMark.writeText("migrated")
+            legacy.deleteRecursively()
+        }
+
+        // 2) 外置目录里残留的 dshhome（早期实验）→ 内部，随后删除残留
+        val strayHome = File(kernel, "dshhome")
+        if (strayHome.isDirectory) {
+            if (!File(home, "dshhome").isDirectory) moveInto(strayHome, File(home, "dshhome"))
+            strayHome.deleteRecursively()
+        }
+
+        // 3) 仍缺文件 → 按需解压（dshroot/bin → kernel，其余 → home）
+        if (!kernelMark.isFile || !homeMark.isFile) {
+            _state.value = State.Extracting(0)
+            val n = extractPayload(kernel, home)
+            kernelMark.writeText("entries=$n")
+            homeMark.writeText("entries=$n")
+        }
+    }
+
+    /** 移动目录/文件（跨存储用复制+删除，同存储优先 rename）。 */
+    private fun moveInto(src: File, dst: File) {
+        if (!src.exists()) return
+        runCatching {
+            if (dst.exists()) dst.deleteRecursively()
+            dst.parentFile?.mkdirs()
+            if (src.renameTo(dst)) return
+            if (src.isDirectory) {
+                src.walkTopDown().forEach { f ->
+                    val target = File(dst, f.relativeTo(src).path)
+                    if (f.isDirectory) target.mkdirs() else {
+                        target.parentFile?.mkdirs()
+                        f.copyTo(target, overwrite = true)
+                    }
+                }
+            } else {
+                src.copyTo(dst, overwrite = true)
+            }
+            src.deleteRecursively()
+        }.onFailure { e ->
+            runCatching { logFile().appendText("\n[布局迁移失败] ${e.message}\n") }
+        }
+    }
     private fun findTokenUrl(afterOffset: Long = 0L): String? {
         val f = logFile(); if (!f.isFile) return null
         val text = runCatching {
