@@ -262,3 +262,14 @@ ImageMagick / OpenSSH / ADB / Vim 等 Termux 包）：**不能直接解包就用
   - **界面**：设置 → 扩展能力 → 系统工具链（19 项），逐项安装/卸载并显示实时进度。
   - **已知限制**：个别包把前缀编进二进制（如 CPython 的 `sys.prefix`），需按包补环境变量或启动脚本；
     24 个包已跑通通用管线，其余按需逐个验证。
+
+- **3.8.1（2026-10-21）**：修复「DSH 启动失败：The coroutine scope left the composition」。
+  - **根因**：DSH 启动是 `suspend fun start()`，由界面用 `rememberCoroutineScope()` /
+    `LaunchedEffect` 调用；用户切走「助手」标签页时组合被销毁 → 作用域取消 →
+    启动协程抛 `CancellationException`，又被 `catch (e: Exception)` 当普通异常处理，
+    于是界面显示成「启动失败：The coroutine scope left the composition」。
+  - **修复**：内核生命周期不再绑定 UI —— `DshManager` 自带 `CoroutineScope(SupervisorJob() + IO)`，
+    新增 `startAsync()` / `restartAsync()` / `startSafeModeAsync()` 供界面调用；
+    `start()` / `startSafeMode()` 的 `doStart()` 包进 `NonCancellable`，并显式
+    `catch (CancellationException) { throw }` 不被当成失败。
+  - **验证**：真机启动后 3 秒立刻切到其它标签页，内核仍正常启动（日志打出 token，回环桥 7865 监听中）。

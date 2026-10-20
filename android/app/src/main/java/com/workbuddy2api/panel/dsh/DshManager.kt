@@ -4,7 +4,12 @@ import android.app.Application
 import android.net.Uri
 import com.workbuddy2api.panel.util.DeviceEnv
 import android.content.Context
+import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.Job
+import kotlinx.coroutines.NonCancellable
+import kotlinx.coroutines.SupervisorJob
+import kotlinx.coroutines.launch
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.flow.asStateFlow
@@ -54,6 +59,16 @@ class DshManager private constructor(private val app: Application) {
 
     private val mutex = Mutex()
     private val _state = MutableStateFlow<State>(State.Stopped)
+
+    /** 内核进程的生命周期不跟 UI 走：启动/重启都跑在这里，页面离开也不会被取消。 */
+    private val bg = CoroutineScope(SupervisorJob() + Dispatchers.IO)
+
+    /** 后台启动（界面调用它，Composable 离开组合也不会中断启动）。 */
+    fun startAsync(): Job = bg.launch { runCatching { start() } }
+
+    fun restartAsync(): Job = bg.launch { runCatching { restart() } }
+
+    fun startSafeModeAsync(): Job = bg.launch { runCatching { startSafeMode() } }
     val state: StateFlow<State> = _state.asStateFlow()
 
     @Volatile private var process: Process? = null
@@ -108,7 +123,9 @@ class DshManager private constructor(private val app: Application) {
         val cur = _state.value
         if (cur is State.Running && process != null) return@withLock cur
         val result = try {
-            withContext(Dispatchers.IO) { doStart() }
+            withContext(NonCancellable + Dispatchers.IO) { doStart() }
+        } catch (e: kotlinx.coroutines.CancellationException) {
+            throw e
         } catch (e: Exception) {
             State.Failed(e.message?.takeIf { it.isNotBlank() } ?: "DSH 启动异常")
         }
@@ -333,7 +350,9 @@ class DshManager private constructor(private val app: Application) {
         }
         resetFailures()
         val result = try {
-            withContext(Dispatchers.IO) { doStart() }
+            withContext(NonCancellable + Dispatchers.IO) { doStart() }
+        } catch (e: kotlinx.coroutines.CancellationException) {
+            throw e
         } catch (e: Exception) {
             State.Failed(e.message?.takeIf { it.isNotBlank() } ?: "DSH 安全模式启动异常")
         }

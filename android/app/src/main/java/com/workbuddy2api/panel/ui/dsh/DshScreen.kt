@@ -79,7 +79,7 @@ fun DshScreen(manager: DshManager, gatewayApiKey: String = "") {
     LaunchedEffect(Unit) {
         val cur = manager.state.value
         if (cur is State.Stopped || cur is State.Failed) {
-            manager.start()
+            manager.startAsync().join()
         }
     }
 
@@ -100,7 +100,7 @@ fun DshScreen(manager: DshManager, gatewayApiKey: String = "") {
                 IconButton(onClick = { showLogs = true }) {
                     Icon(Icons.Outlined.Description, contentDescription = "日志", tint = wb.ink2)
                 }
-                IconButton(onClick = { scope.launch { manager.restart() } }) {
+                IconButton(onClick = { manager.restartAsync() }) {
                     Icon(Icons.Outlined.Refresh, contentDescription = "重启", tint = wb.ink2)
                 }
             },
@@ -159,7 +159,7 @@ fun DshScreen(manager: DshManager, gatewayApiKey: String = "") {
                 Spacer(Modifier.height(12.dp))
                 WbButton(
                     text = "重新启动",
-                    onClick = { scope.launch { manager.restart() } },
+                    onClick = { manager.restartAsync() },
                     primary = true,
                     modifier = Modifier.fillMaxWidth(),
                 )
@@ -167,7 +167,7 @@ fun DshScreen(manager: DshManager, gatewayApiKey: String = "") {
                 // 连续失败时提供安全模式：用出厂 profile 启动，保留会话与凭证
                 WbButton(
                     text = "以安全模式启动（出厂配置）",
-                    onClick = { scope.launch { manager.startSafeMode() } },
+                    onClick = { manager.startSafeModeAsync() },
                     modifier = Modifier.fillMaxWidth(),
                 )
             }
@@ -235,7 +235,7 @@ private fun DshIdleCard(manager: DshManager) {
             Spacer(Modifier.height(14.dp))
             WbButton(
                 text = "启动 DSH 内核",
-                onClick = { scope.launch { manager.start() } },
+                onClick = { manager.startAsync() },
                 primary = true,
                 modifier = Modifier.fillMaxWidth(),
             )

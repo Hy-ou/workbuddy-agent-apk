@@ -5,6 +5,17 @@
 
 ---
 
+## 3.8.1 — 2026-10-21
+
+### 修复：DSH 启动被 UI 协程取消（The coroutine scope left the composition）
+
+- DshManager 增加自有 CoroutineScope + startAsync/restartAsync/startSafeModeAsync；
+- doStart 包 NonCancellable，CancellationException 直接抛出不再记为失败；
+- UI 全部改为调用 async 门面。
+- 真机验证：启动后 3 秒切走标签页，内核仍正常启动。
+- 版本 3.8.1 / versionCode 15。
+
+---
 ## 3.8.0 — 2026-10-21
 
 ### 新增：扩展中心（Termux 工具链 19 项）
