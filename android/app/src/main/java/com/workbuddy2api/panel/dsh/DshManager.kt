@@ -355,7 +355,15 @@ class DshManager private constructor(private val app: Application) {
             strayHome.deleteRecursively()
         }
 
-        // 3) 仍缺文件 → 按需解压（dshroot/bin → kernel，其余 → home）
+        // 3) 清理早期「整树外置」实验残留在内核目录的 home 相关文件（内部已有副本）
+        if (kernel.absolutePath.startsWith(StorageAccess.sharedRoot().absolutePath)) {
+            runCatching {
+                if (File(home, "runtime/etc").isDirectory) File(kernel, "runtime").deleteRecursively()
+                if (File(home, "PAYLOAD-MANIFEST.json").isFile) File(kernel, "PAYLOAD-MANIFEST.json").delete()
+            }
+        }
+
+        // 4) 仍缺文件 → 按需解压（dshroot/bin → kernel，其余 → home）
         if (!kernelMark.isFile || !homeMark.isFile) {
             _state.value = State.Extracting(0)
             val n = extractPayload(kernel, home)
