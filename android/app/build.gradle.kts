@@ -13,8 +13,8 @@ android {
         applicationId = "com.workbuddy2api.panel"
         minSdk = 24
         targetSdk = 35
-        versionCode = 13
-        versionName = "3.7.1"
+        versionCode = 14
+        versionName = "3.8.0"
         vectorDrawables { useSupportLibrary = true }
         ndk { abiFilters += listOf("arm64-v8a", "x86_64") }
     }
@@ -84,6 +84,9 @@ dependencies {
     implementation("org.jetbrains.kotlinx:kotlinx-serialization-json:1.7.3")
     implementation("com.squareup.okhttp3:okhttp:4.12.0")
     // Shizuku：免 root 的系统 shell 通道（可选，未安装 Shizuku 时自动降级）
+    // Termux 包安装：ar(=deb)/tar/xz 解包
+    implementation("org.apache.commons:commons-compress:1.26.2")
+    implementation("org.tukaani:xz:1.10")
     implementation("dev.rikka.shizuku:api:13.1.5")
     implementation("dev.rikka.shizuku:provider:13.1.5")
 

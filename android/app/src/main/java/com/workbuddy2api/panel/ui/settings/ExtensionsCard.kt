@@ -211,7 +211,60 @@ fun ExtensionsCard(modifier: Modifier = Modifier) {
         }
         Spacer(Modifier.height(12.dp))
 
-        // 扩展中心：用内置 npm 把命令行工具装到内核 PATH
+        // 扩展中心（一）：Termux 系统工具链
+        Text("系统工具链（Termux）", style = MaterialTheme.typography.bodyMedium, color = wb.ink)
+        Text(
+            "Python / Go / Rust / Clang / JDK / Git 等 19 项。安装时自动解析依赖闭包、校验 SHA-256，" +
+                "并对每个 ELF 重写 RUNPATH 完成重定位；装好后内核 PATH 直接可用。",
+            style = MaterialTheme.typography.bodySmall,
+            color = wb.ink3,
+        )
+        val toolItems = com.workbuddy2api.panel.dsh.Toolchain.CATALOG
+        toolItems.forEach { item ->
+            val installed = runCatching { manager.toolchainInstalled(item.id) }.getOrDefault(false)
+            Row(
+                Modifier.fillMaxWidth().padding(vertical = 2.dp),
+                verticalAlignment = Alignment.CenterVertically,
+                horizontalArrangement = Arrangement.spacedBy(8.dp),
+            ) {
+                Column(Modifier.weight(1f)) {
+                    Text(item.label, style = MaterialTheme.typography.bodySmall, color = wb.ink)
+                    Text(
+                        if (busy == "tc:" + item.id) note.ifBlank { item.desc } else item.desc,
+                        style = MaterialTheme.typography.labelSmall,
+                        color = if (busy == "tc:" + item.id) wb.warn else wb.ink3,
+                    )
+                }
+                WbButton(
+                    text = when {
+                        busy == "tc:" + item.id -> "安装中…"
+                        installed -> "卸载"
+                        else -> "安装"
+                    },
+                    onClick = {
+                        if (busy.isNotBlank()) return@WbButton
+                        if (installed) {
+                            val r = manager.uninstallToolchain(item.id)
+                            note = r.message
+                            tick++
+                        } else {
+                            busy = "tc:" + item.id
+                            note = "准备安装 " + item.label + "…"
+                            scope.launch {
+                                val r = manager.installToolchain(item.id) { line -> note = line }
+                                note = if (r.ok) r.message else "失败：" + r.message
+                                busy = ""
+                                tick++
+                            }
+                        }
+                    },
+                    primary = !installed,
+                )
+            }
+        }
+        Spacer(Modifier.height(12.dp))
+
+        // 扩展中心（二）：用内置 npm 把命令行工具装到内核 PATH
         Text("扩展中心（CLI 工具）", style = MaterialTheme.typography.bodyMedium, color = wb.ink)
         Text(
             if (npmOk) "用内置 npm 装到 home/tools，其 bin 已加入内核 PATH，Agent 可直接调用。"

@@ -38,6 +38,27 @@ class MainActivity : ComponentActivity() {
         val startTab = intent?.getIntExtra("tab", 0) ?: 0
         val startMode = intent?.getStringExtra("mode") ?: ""
         setContent { WbRoot(startTab, startMode) }
+        debugToolchainInstall()
+    }
+
+    /**
+     * 仅调试包：`adb shell am start -n … --es wbTool git` 直接跑一次工具链安装，
+     * 进度与结果写入 logcat（tag wbTool），无需在界面上点按。
+     */
+    private fun debugToolchainInstall() {
+        if (!BuildConfig.DEBUG) return
+        val id = intent?.getStringExtra("wbTool")?.takeIf { it.isNotBlank() } ?: return
+        Thread({
+            runCatching {
+                val manager = com.workbuddy2api.panel.dsh.DshManager.get(applicationContext)
+                val r = kotlinx.coroutines.runBlocking {
+                    manager.installToolchain(id) { line ->
+                        android.util.Log.i("wbTool", line)
+                    }
+                }
+                android.util.Log.i("wbTool", "RESULT ok=" + r.ok + " msg=" + r.message)
+            }.onFailure { android.util.Log.e("wbTool", "EXCEPTION", it) }
+        }, "wb-toolchain-debug").start()
     }
 
     private fun requestNotificationPermission() {

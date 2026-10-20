@@ -242,3 +242,23 @@ ImageMagick / OpenSSH / ADB / Vim 等 Termux 包）：**不能直接解包就用
    逐包 SHA-256 校验后原子发布；
 3. **前缀重写** —— 文本/脚本里的 `$PREFIX` 与绝对路径改写，shebang 修复；
    对 CPython 这类把 prefix 编进二进制的包，需要额外补 `PYTHONHOME`/`--prefix` 起始脚本。
+
+- **3.8.0（2026-10-21）**：扩展中心 —— Termux 系统工具链安装（19 项）。
+  - **重定位原理（实测）**：Termux 二进制的 `INTERP` 是 `/system/bin/linker64`（Bionic，可直接跑），
+    但 `DT_RUNPATH` 写死 `/data/data/com.termux/files/usr/lib`；安装时对每个 ELF 跑
+    `patchelf --set-rpath <我们的 lib>`，文本文件做前缀替换，即完成重定位。
+  - **安装管线**（`dsh/TermuxRepo.kt` + `dsh/DebExtractor.kt` + `dsh/Toolchain.kt`）：
+    拉取 apt `Packages` 索引（TUNA → USTC → BFSU → 官方，UA 伪装成 apt，否则 TUNA 返回 403）→
+    递归解析 `Depends` 闭包 → 逐包下载（带重试）→ SHA-256 校验 → ar/deb + tar.xz 解包 →
+    剥掉 Termux 前缀落到 `home/toolchain/usr` → patchelf 重写 RUNPATH + 文本前缀替换 → 写安装标记。
+  - **patchelf** 用 NDK 交叉编译（`android/dsh/build-patchelf.ps1`，16 KB 对齐），随 APK 打包为
+    `libwbpatchelf.so`；启动器 `libwbnode_shim.so` 的构建脚本 `android/dsh/build-shim.ps1` 也入库。
+  - **内核环境**：`PREFIX` / `TERMUX_PREFIX`、`GIT_EXEC_PATH`、`GIT_TEMPLATE_DIR`；
+    若装了 ca-certificates 则注入 `GIT_SSL_CAINFO`/`CURL_CA_BUNDLE`（libcurl 里 CA 路径是编译期写死的），
+    装了 python 则注入 `PYTHONHOME`。`home/toolchain/usr/bin` 已在内核 PATH 中。
+  - **真机验证**：`git`（14 个包，212 个 ELF 改 RUNPATH，59 个文本改前缀）→ `git version 2.56.0`，
+    `git init` / `commit` 正常；`sqlite`（5 个包）→ `sqlite3 3.54.1`，`select 1+1` 返回 2。
+    HTTPS 远程操作受本机网络限制（github/gitee 不可达），TLS 与 CA 链路已正常（不再报 trust anchor）。
+  - **界面**：设置 → 扩展能力 → 系统工具链（19 项），逐项安装/卸载并显示实时进度。
+  - **已知限制**：个别包把前缀编进二进制（如 CPython 的 `sys.prefix`），需按包补环境变量或启动脚本；
+    24 个包已跑通通用管线，其余按需逐个验证。

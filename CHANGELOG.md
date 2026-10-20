@@ -5,6 +5,24 @@
 
 ---
 
+## 3.8.0 — 2026-10-21
+
+### 新增：扩展中心（Termux 工具链 19 项）
+
+- `dsh/TermuxRepo.kt`：apt Packages 索引（4 镜像 + apt UA）、Depends 闭包、deb 下载（重试 + SHA-256）。
+- `dsh/DebExtractor.kt`：ar → data.tar.xz → tar 解包，剥离 Termux 前缀，保留符号链接/可执行位。
+- `dsh/Toolchain.kt`：19 项目录、patchelf 重写 RUNPATH、文本前缀替换、安装标记。
+- patchelf 用 NDK 交叉编译为 `libwbpatchelf.so`（16 KB 对齐），构建脚本入库。
+- 内核环境注入 PREFIX/GIT_EXEC_PATH/GIT_TEMPLATE_DIR/GIT_SSL_CAINFO/CURL_CA_BUNDLE/PYTHONHOME。
+- 设置 → 扩展能力 → 系统工具链（19 项）逐个安装/卸载，带实时进度。
+
+### 验证
+
+- Git：14 包，212 ELF / 59 文本重定位 → `git version 2.56.0`，init/commit 正常。
+- SQLite：5 包，220 ELF / 6 文本 → `sqlite3 3.54.1`，`select 1+1` → 2。
+- 版本 3.8.0 / versionCode 14；release 112.4 MB；16 KB 对齐自查通过（16 个库）。
+
+---
 ## 3.7.1 — 2026-10-20
 
 ### 修复：16 KB 页对齐告警

@@ -165,10 +165,14 @@ class DshManager private constructor(private val app: Application) {
         env["SHELL"] = "/system/bin/sh"
         env["WB_BRIDGE_TOKEN"] = LocalBridge.token(app)
         notifyScript?.let { env["WB_NOTIFY"] = it.absolutePath }
+        env["PREFIX"] = File(home, "toolchain/usr").absolutePath
+        env["GIT_EXEC_PATH"] = File(home, "toolchain/usr/libexec/git-core").absolutePath
+        env["GIT_TEMPLATE_DIR"] = File(home, "toolchain/usr/share/git-core/templates").absolutePath
         env["WB_NODE"] = node.absolutePath
         env["WB_DSH_HOME"] = home.absolutePath
         env["PATH"] = listOf(
             File(home, "tools/node_modules/.bin").absolutePath,
+            File(home, "toolchain/usr/bin").absolutePath,
             File(kernel, "bin").absolutePath,
             app.applicationInfo.nativeLibraryDir,
             "/system/bin", "/system/xbin",
@@ -179,6 +183,14 @@ class DshManager private constructor(private val app: Application) {
             ?: File(home, "runtime/etc/cacert.pem").takeIf { it.isFile }?.absolutePath
             ?: File(app.filesDir, "gateway/cacert.pem").takeIf { it.isFile }?.absolutePath
             ?: ""
+        // 扩展中心工具链：部分二进制把前缀编译进去了，只能靠环境变量覆盖
+        val tusr = File(home, "toolchain/usr")
+        File(tusr, "etc/tls/cert.pem").takeIf { it.isFile }?.let {
+            env["GIT_SSL_CAINFO"] = it.absolutePath
+            env["CURL_CA_BUNDLE"] = it.absolutePath
+            env["SSL_CERT_FILE"] = it.absolutePath
+        }
+        if (File(tusr, "lib/python3.14").isDirectory) env["PYTHONHOME"] = tusr.absolutePath
         env["OPENSSL_CONF"] = File(home, "runtime/etc/openssl.cnf").absolutePath
         env["GIT_CONFIG_NOSYSTEM"] = "1"
         env["GIT_PAGER"] = "cat"
@@ -361,6 +373,15 @@ class DshManager private constructor(private val app: Application) {
 
     /** 清空我的补丁，并让内核树下次启动重新解压（回出厂）。 */
     fun clearMyPatches() = runCatching { UserPatches.clear(homeDir(), kernelDir()) }
+
+    fun toolchainInstalled(id: String): Boolean = Toolchain.installed(homeDir(), id)
+
+    fun toolchainInstalledIds(): List<String> = Toolchain.installedIds(homeDir())
+
+    suspend fun installToolchain(id: String, onLog: (String) -> Unit = {}): Toolchain.Result =
+        Toolchain.install(app, homeDir(), id, app.cacheDir, onLog)
+
+    fun uninstallToolchain(id: String): Toolchain.Result = Toolchain.uninstall(homeDir(), id)
 
     fun npmAvailable(): Boolean = PluginInstaller.npmAvailable(app, homeDir())
 
