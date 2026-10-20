@@ -39,6 +39,7 @@ class MainActivity : ComponentActivity() {
         val startMode = intent?.getStringExtra("mode") ?: ""
         setContent { WbRoot(startTab, startMode) }
         debugToolchainInstall()
+        debugPluginInstall()
     }
 
     /**
@@ -59,6 +60,19 @@ class MainActivity : ComponentActivity() {
                 android.util.Log.i("wbTool", "RESULT ok=" + r.ok + " msg=" + r.message)
             }.onFailure { android.util.Log.e("wbTool", "EXCEPTION", it) }
         }, "wb-toolchain-debug").start()
+    }
+
+    /** 仅调试包：`--es wbPlugin <包名>` 走一次社区插件安装（与界面按钮同一条路径）。 */
+    private fun debugPluginInstall() {
+        if (!BuildConfig.DEBUG) return
+        val pkg = intent?.getStringExtra("wbPlugin")?.takeIf { it.isNotBlank() } ?: return
+        Thread({
+            runCatching {
+                val manager = com.workbuddy2api.panel.dsh.DshManager.get(applicationContext)
+                val r = kotlinx.coroutines.runBlocking { manager.installPlugin(pkg) }
+                android.util.Log.i("wbPlugin", "RESULT ok=" + r.ok + " msg=" + r.output)
+            }.onFailure { android.util.Log.e("wbPlugin", "EXCEPTION", it) }
+        }, "wb-plugin-debug").start()
     }
 
     private fun requestNotificationPermission() {

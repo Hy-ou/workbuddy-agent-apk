@@ -6,11 +6,15 @@ import kotlinx.coroutines.withContext
 import java.io.File
 
 /**
- * 用内置 npm（payload 里的 9 MB 精简 npm）+ 内核 node 运行时安装/卸载插件与命令行工具。
+ * 社区插件安装：与 DSH 官方行为一致 —— 在 profile 目录里用 pnpm 安装。
  *
- * 安装位置：
- * - 社区插件 → `kernel/dshroot/lib`（npm 装到其 node_modules，DSH 可直接 import）
- * - 扩展中心 CLI → `home/tools`（其 .bin 已加入内核 PATH）
+ * 两个坑（都是真机踩出来的）：
+ * 1. 不能装到内核树（`/sdcard/WorkBuddy/dsh/...`）：npm/pnpm 的原子重命名会被 FUSE 拒绝
+ *    （`The operation was rejected by your operating system`）。
+ * 2. DSH 只从 profile 目录（`dshhome/profiles/web`）解析插件包名，装到别处会
+ *    `ERR_MODULE_NOT_FOUND ... imported from profiles/web`。
+ *
+ * 命令行工具（扩展中心）仍装到 `home/tools`（应用私有目录，npm 可正常写入）。
  */
 object PluginInstaller {
 
@@ -19,95 +23,142 @@ object PluginInstaller {
 
     data class Result(val ok: Boolean, val output: String)
 
+    fun profileDir(homeDir: File): File = File(homeDir, "dshhome/profiles/web")
+
     private fun node(context: Context) = File(context.applicationInfo.nativeLibraryDir, "libdshnode.so")
+    /** 优先纯 JS 入口：pnpm>=9 自带的 @pnpm/exe 原生二进制无法在应用数据目录执行。 */
+    private fun pnpmEntry(homeDir: File): File {
+        return File(homeDir, "pnpmjs/node_modules/pnpm/bin/pnpm.cjs")
+    }
     private fun npmCli(homeDir: File) = File(homeDir, "npm/bin/npm-cli.js")
 
     fun npmAvailable(context: Context, homeDir: File): Boolean =
-        node(context).isFile && npmCli(homeDir).isFile
+        node(context).isFile && (pnpmEntry(homeDir).isFile || npmCli(homeDir).isFile)
 
-    suspend fun installPlugin(context: Context, kernelDir: File, homeDir: File, pkg: String): Result =
-        run(context, kernelDir, homeDir, pkg, target = File(kernelDir, "dshroot/lib/node_modules/@deepseek-ai/dsh"), action = "install")
+    fun pluginInstalled(homeDir: File, pkg: String): Boolean =
+        File(profileDir(homeDir), "node_modules/" + pkg.replace("/", File.separator)).isDirectory
 
-    suspend fun uninstallPlugin(context: Context, kernelDir: File, homeDir: File, pkg: String): Result =
-        run(context, kernelDir, homeDir, pkg, target = File(kernelDir, "dshroot/lib/node_modules/@deepseek-ai/dsh"), action = "uninstall")
+    fun toolInstalled(homeDir: File, pkg: String): Boolean =
+        File(homeDir, "tools/node_modules/" + pkg.replace("/", File.separator)).isDirectory
 
-    /** 扩展中心：把 CLI 工具装到 home/tools（PATH 里已包含 node_modules/.bin）。 */
-    suspend fun installTool(context: Context, kernelDir: File, homeDir: File, pkg: String): Result =
-        run(context, kernelDir, homeDir, pkg, target = File(homeDir, "tools"), action = "install")
-
-    suspend fun uninstallTool(context: Context, kernelDir: File, homeDir: File, pkg: String): Result =
-        run(context, kernelDir, homeDir, pkg, target = File(homeDir, "tools"), action = "uninstall")
-
-    fun toolInstalled(homeDir: File, pkg: String): Boolean {
-        val dir = File(homeDir, "tools/node_modules/" + pkg.replace("/", File.separator))
-        return dir.isDirectory
-    }
-
-    fun pluginInstalled(kernelDir: File, pkg: String): Boolean {
-        val dir = File(kernelDir, "dshroot/lib/node_modules/@deepseek-ai/dsh/node_modules/" + pkg.replace("/", File.separator))
-        return dir.isDirectory
-    }
-
-    private suspend fun run(
+    /** 社区插件：`pnpm add|remove <pkg>`，工作目录是 profile。 */
+    suspend fun plugin(
         context: Context,
-        kernelDir: File,
         homeDir: File,
         pkg: String,
-        target: File,
         action: String,
     ): Result = withContext(Dispatchers.IO) {
         if (!SAFE_PKG.matches(pkg)) return@withContext Result(false, "包名不合法：$pkg")
-        if (!npmAvailable(context, homeDir)) {
-            return@withContext Result(false, "内核未内置 npm（请升级到 3.6.0+ 并重新解压内核）")
-        }
-        // npm 需要目标目录里有 package.json（或至少可写）
-        target.mkdirs()
-        val pkgJson = File(target, "package.json")
-        if (!pkgJson.isFile) {
-            pkgJson.writeText(
-                """{"name":"wb-${if (target.name == "tools") "tools" else "kernel"}","private":true}""",
-            )
-        }
+        val dir = profileDir(homeDir)
+        if (!dir.isDirectory) return@withContext Result(false, "profile 目录不存在：${dir.name}（先启动一次内核）")
+        val entry = pnpmEntry(homeDir)
+        val usePnpm = entry.isFile
+        if (usePnpm) alignStoreDir(context, homeDir)
         val cmd = buildList {
             add(node(context).absolutePath)
-            add(npmCli(homeDir).absolutePath)
-            add(action)
-            add(pkg)
-            add("--prefix"); add(target.absolutePath)
+            if (usePnpm) {
+                add(entry.absolutePath)
+                add(if (action == "uninstall") "remove" else "add")
+                add(pkg)
+                // profile 是 pnpm workspace 根：必须显式 -w，否则 pnpm 拒绝
+                add("--workspace-root")
+                add("--reporter=append-only")
+            } else {
+                add(npmCli(homeDir).absolutePath)
+                add(if (action == "uninstall") "uninstall" else "install")
+                add(pkg)
+                add("--no-audit"); add("--no-fund"); add("--loglevel=error")
+            }
             add("--registry=$REGISTRY")
-            add("--no-audit"); add("--no-fund"); add("--omit=dev"); add("--loglevel=error")
         }
+        runCommand(context, homeDir, dir, cmd, 240_000)
+    }
+
+    /** 扩展中心 CLI 工具：装到 home/tools（私有目录）。 */
+    suspend fun tool(
+        context: Context,
+        homeDir: File,
+        pkg: String,
+        action: String,
+    ): Result = withContext(Dispatchers.IO) {
+        if (!SAFE_PKG.matches(pkg)) return@withContext Result(false, "包名不合法：$pkg")
+        val target = File(homeDir, "tools").apply { mkdirs() }
+        val pkgJson = File(target, "package.json")
+        if (!pkgJson.isFile) pkgJson.writeText("""{"name":"wb-tools","private":true}""")
+        val cmd = listOf(
+            node(context).absolutePath,
+            npmCli(homeDir).absolutePath,
+            if (action == "uninstall") "uninstall" else "install",
+            pkg,
+            "--prefix", target.absolutePath,
+            "--registry=$REGISTRY",
+            "--no-audit", "--no-fund", "--omit=dev", "--loglevel=error",
+        )
+        runCommand(context, homeDir, target, cmd, 240_000)
+    }
+
+    /**
+     * pnpm 会检查 node_modules/.modules.yaml 里记录的 storeDir 是否与当前版本一致，
+     * 不一致直接报 ERR_PNPM_UNEXPECTED_STORE 并拒绝安装。profile 最初由别的 pnpm 版本装过，
+     * 这里把记录改成当前 pnpm 期望的位置（并建好目录），让 add/remove 能跑。
+     */
+    private fun alignStoreDir(context: Context, homeDir: File) {
+        val modules = File(profileDir(homeDir), "node_modules/.modules.yaml")
+        if (!modules.isFile) return
+        val store = File(context.filesDir, ".local/share/pnpm/store/v10")
+        runCatching { store.mkdirs() }
+        runCatching {
+            val text = modules.readText()
+            val updated = text.replace(
+                Regex("\"storeDir\":\\s*\"[^\"]*\""),
+                "\"storeDir\": \"" + store.absolutePath + "\"",
+            )
+            if (updated != text) modules.writeText(updated)
+        }
+    }
+
+    private fun runCommand(
+        context: Context,
+        homeDir: File,
+        workDir: File,
+        cmd: List<String>,
+        timeoutMs: Long,
+    ): Result {
         val env = HashMap<String, String>()
         env["PATH"] = listOf(
-            File(kernelDir, "bin").absolutePath,
-            File(homeDir, "tools/node_modules/.bin").absolutePath,
+            File(homeDir, "bin").absolutePath,
             context.applicationInfo.nativeLibraryDir,
             "/system/bin", "/system/xbin",
         ).joinToString(":")
         env["HOME"] = context.filesDir.absolutePath
         env["TMPDIR"] = context.cacheDir.absolutePath
-        env["npm_config_cache"] = File(context.filesDir, "npm-cache").absolutePath
+        env["LD_LIBRARY_PATH"] = context.applicationInfo.nativeLibraryDir
+        env["WB_NODE"] = File(context.applicationInfo.nativeLibraryDir, "libdshnode.so").absolutePath
+        env["WB_DSH_HOME"] = homeDir.absolutePath
+        env["npm_config_cache"] = File(homeDir, "npm-cache").absolutePath
         env["npm_config_update_notifier"] = "false"
-        env["SSL_CERT_FILE"] = File(homeDir, "runtime/etc/cacert-system.pem")
-            .takeIf { it.isFile }?.absolutePath ?: File(homeDir, "runtime/etc/cacert.pem").absolutePath
-        runCatching {
+        env["npm_config_fund"] = "false"
+        env["npm_config_audit"] = "false"
+        return runCatching {
             val pb = ProcessBuilder(cmd)
-            pb.directory(target)
+            pb.directory(workDir)
             pb.redirectErrorStream(true)
             pb.environment().putAll(env)
             val p = pb.start()
-            val out = p.inputStream.bufferedReader().readText()
-            val deadline = System.currentTimeMillis() + 180_000
-            while (System.currentTimeMillis() < deadline && p.isAliveCompat()) Thread.sleep(150)
-            val code = runCatching { p.exitValue() }.getOrDefault(-1)
-            if (code != 0) p.destroy()
-            Result(code == 0, out.takeLast(3000).ifBlank { "exit=$code" })
-        }.getOrElse { Result(false, it.message ?: "安装失败") }
-    }
-
-    private fun Process.isAliveCompat(): Boolean = try {
-        exitValue(); false
-    } catch (e: IllegalThreadStateException) {
-        true
+            val out = StringBuilder()
+            val reader = Thread {
+                runCatching { p.inputStream.bufferedReader().forEachLine { out.appendLine(it) } }
+            }.apply { isDaemon = true; start() }
+            val deadline = System.currentTimeMillis() + timeoutMs
+            var code = -1
+            while (System.currentTimeMillis() < deadline) {
+                code = runCatching { p.exitValue() }.getOrDefault(-1)
+                if (code >= 0) break
+                Thread.sleep(150)
+            }
+            if (code < 0) runCatching { p.destroy() }
+            reader.join(1000)
+            Result(code == 0, out.toString().trim().takeLast(2000).ifBlank { "exit=$code" })
+        }.getOrElse { Result(false, it.message ?: "执行失败") }
     }
 }

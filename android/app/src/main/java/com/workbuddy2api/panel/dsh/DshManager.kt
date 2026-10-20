@@ -151,7 +151,7 @@ class DshManager private constructor(private val app: Application) {
         // 内核命令 notify（走回环桥发通知）；清掉旧版本尝试过的插件登记
         val notifyScript = runCatching { NotifyCli.ensure(app, home) }.getOrNull()
         ensureBinShims(home)
-        runCatching { InstalledPlugins.remove(app, NotifyPlugin.PACKAGE) }
+        InstalledPlugins.removeById(app, NotifyPlugin.ID)
         syncManagedPatch(home)
         val replayed = runCatching { UserPatches.replay(kernel, home) }.getOrDefault(0)
         val node = File(app.applicationInfo.nativeLibraryDir, "libdshnode.so")
@@ -404,10 +404,10 @@ class DshManager private constructor(private val app: Application) {
 
     fun npmAvailable(): Boolean = PluginInstaller.npmAvailable(app, homeDir())
 
-    fun pluginInstalled(pkg: String): Boolean = PluginInstaller.pluginInstalled(kernelDir(), pkg)
+    fun pluginInstalled(pkg: String): Boolean = PluginInstaller.pluginInstalled(homeDir(), pkg)
 
     suspend fun installPlugin(pkg: String): PluginInstaller.Result {
-        val r = PluginInstaller.installPlugin(app, kernelDir(), homeDir(), pkg)
+        val r = PluginInstaller.plugin(app, homeDir(), pkg, "install")
         if (r.ok) {
             InstalledPlugins.add(app, pkg.substringAfterLast('/'), pkg)
             syncManagedPatch(homeDir())
@@ -416,7 +416,7 @@ class DshManager private constructor(private val app: Application) {
     }
 
     suspend fun uninstallPlugin(pkg: String): PluginInstaller.Result {
-        val r = PluginInstaller.uninstallPlugin(app, kernelDir(), homeDir(), pkg)
+        val r = PluginInstaller.plugin(app, homeDir(), pkg, "uninstall")
         if (r.ok) {
             InstalledPlugins.remove(app, pkg)
             syncManagedPatch(homeDir())
@@ -427,10 +427,10 @@ class DshManager private constructor(private val app: Application) {
     fun toolInstalled(pkg: String): Boolean = PluginInstaller.toolInstalled(homeDir(), pkg)
 
     suspend fun installTool(pkg: String): PluginInstaller.Result =
-        PluginInstaller.installTool(app, kernelDir(), homeDir(), pkg)
+        PluginInstaller.tool(app, homeDir(), pkg, "install")
 
     suspend fun uninstallTool(pkg: String): PluginInstaller.Result =
-        PluginInstaller.uninstallTool(app, kernelDir(), homeDir(), pkg)
+        PluginInstaller.tool(app, homeDir(), pkg, "uninstall")
 
     fun exportBackup(uri: Uri): Result<DshBackup.ExportResult> =
         DshBackup.export(app, homeDir(), uri)
@@ -446,17 +446,19 @@ class DshManager private constructor(private val app: Application) {
      */
     /** 首次启动时用内置 npm 装一个与应用前缀无关的 pnpm（payload 自带的 pnpm 硬编码 Termux 前缀）。 */
     private fun ensurePnpmRuntime(home: File, node: File) {
-        val entry = File(home, "pnpmjs/node_modules/pnpm/bin/pnpm.mjs")
+        val entry = File(home, "pnpmjs/node_modules/pnpm/bin/pnpm.cjs")
+        // pnpm>=9 会拉原生 @pnpm/exe（应用数据目录不可 exec），只认纯 JS 的 pnpm 10
         if (entry.isFile) return
+        runCatching { File(home, "pnpmjs").deleteRecursively() }
         Thread({
             runCatching {
                 val npmCli = File(home, "npm/bin/npm-cli.js")
                 if (!npmCli.isFile) return@runCatching
                 val pb = ProcessBuilder(
-                    node.absolutePath, npmCli.absolutePath, "install", "pnpm",
+                    node.absolutePath, npmCli.absolutePath, "install", "pnpm@10",
                     "--prefix", File(home, "pnpmjs").absolutePath,
                     "--registry=https://registry.npmmirror.com",
-                    "--no-audit", "--no-fund", "--loglevel=error",
+                    "--omit=optional", "--ignore-scripts", "--no-audit", "--no-fund", "--loglevel=error",
                 )
                 pb.directory(home)
                 pb.redirectErrorStream(true)

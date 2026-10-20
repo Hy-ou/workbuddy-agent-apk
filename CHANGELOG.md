@@ -5,6 +5,22 @@
 
 ---
 
+## 3.8.2 — 2026-10-21
+
+### 修复
+
+- 启动警告 `1 entry did not activate`：`cordis.patch.yml` 残留 wb-notify；改为按 id 清理
+  （`InstalledPlugins.removeById`）。
+- 社区插件安装失败（四处根因）：
+  1. 改到 `dshhome/profiles/web` 安装（内核树在 /sdcard 上被 FUSE 拒绝，且 DSH 只认 profile）；
+  2. pnpm 固定 10.x + `--omit=optional --ignore-scripts`（避开原生 @pnpm/exe 的 EACCES）；
+  3. 安装前对齐 `.modules.yaml` 的 storeDir 到 `store/v10`，并去掉 XDG_DATA_HOME；
+  4. `pnpm add/remove` 加 `--workspace-root`。
+- 真机验证：应用内安装 dsh-cost-meter 成功，patch 自动登记，重启后日志显示插件已加载、
+  无 warning。
+- 版本 3.8.2 / versionCode 16。
+
+---
 ## 3.8.1 — 2026-10-21
 
 ### 修复：DSH 启动被 UI 协程取消（The coroutine scope left the composition）

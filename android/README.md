@@ -273,3 +273,24 @@ ImageMagick / OpenSSH / ADB / Vim 等 Termux 包）：**不能直接解包就用
     `start()` / `startSafeMode()` 的 `doStart()` 包进 `NonCancellable`，并显式
     `catch (CancellationException) { throw }` 不被当成失败。
   - **验证**：真机启动后 3 秒立刻切到其它标签页，内核仍正常启动（日志打出 token，回环桥 7865 监听中）。
+
+- **3.8.2（2026-10-21）**：修复「社区插件安装失败」与启动日志里的 `wb-notify` 警告。
+  - **日志警告**：`cordis.patch.yml` 里残留 `wb-notify` → 每次启动
+    `dsh: warning: 1 entry did not activate` + `ERR_MODULE_NOT_FOUND`。
+    根因是清理时按**包名**删（`@workbuddy/...`），而常量已改成 `@deepseek-ai/...`，删不掉；
+    改为按**插件 id** 删除（`InstalledPlugins.removeById`），patch 不再残留。
+  - **社区插件安装失败**，真机逐层排查出三个原因：
+    1. 装到内核树（`/sdcard/WorkBuddy/dsh/...`）被 FUSE 拒绝：
+       `The operation was rejected by your operating system`；且 DSH 只从 profile 解析插件。
+       → 改为与官方一致：在 `dshhome/profiles/web` 里安装。
+    2. pnpm ≥9 自带原生 `@pnpm/exe`，在应用数据目录执行报 `EACCES`；
+       → 固定 pnpm@10，安装时 `--omit=optional --ignore-scripts`（纯 JS 的 `bin/pnpm.cjs`）。
+    3. profile 的 `node_modules/.modules.yaml` 记录了旧 pnpm 的 storeDir，
+       pnpm 10 直接拒绝（`ERR_PNPM_UNEXPECTED_STORE`）；
+       → 安装前把 `storeDir` 对齐到 `files/.local/share/pnpm/store/v10` 并建目录
+         （并去掉会改变默认 store 的 `XDG_DATA_HOME`）。
+    4. profile 是 pnpm workspace 根，`pnpm add` 需显式 `--workspace-root`。
+  - **验证**：应用内安装 `dsh-cost-meter` → `Done in 1s using pnpm v10.34.7`，
+    文件落在 `profiles/web/node_modules/dsh-cost-meter`，patch 自动加
+    `- id: dsh-cost-meter`；重启内核日志出现
+    `[dsh-cost-meter] 已加载,账本:…`，**无 warning、无未激活条目**。

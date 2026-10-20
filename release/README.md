@@ -5,8 +5,8 @@ APK 体积约 107 / 117 MB，超出 git 仓库的合理承载（GitHub 单文件
 
 | 附件 | 大小 | 说明 |
 |---|---|---|
-| `WorkBuddy-3.8.1.apk` | 106.8 MB | 正式包（release，debug 签名，可直接安装） |
-| `WorkBuddy-3.8.1-debug.apk` | 117.5 MB | 调试包（可用 `run-as`、WebView 远程调试） |
+| `WorkBuddy-3.8.2.apk` | 106.8 MB | 正式包（release，debug 签名，可直接安装） |
+| `WorkBuddy-3.8.2-debug.apk` | 117.5 MB | 调试包（可用 `run-as`、WebView 远程调试） |
 | `SHA256SUMS` | — | 两个 APK 的 SHA-256 校验值 |
 
 ## 下载
@@ -16,16 +16,16 @@ APK 体积约 107 / 117 MB，超出 git 仓库的合理承载（GitHub 单文件
 **GitHub CLI**
 
 ```bash
-gh release download v3.8.1 -R Hy-ou/workbuddy-agent-apk -p "*.apk"
-gh release download v3.8.1 -R Hy-ou/workbuddy-agent-apk -p "SHA256SUMS"
+gh release download v3.8.2 -R Hy-ou/workbuddy-agent-apk -p "*.apk"
+gh release download v3.8.2 -R Hy-ou/workbuddy-agent-apk -p "SHA256SUMS"
 ```
 
 **curl（公开仓库，无需登录）**
 
 ```bash
-BASE=https://github.com/Hy-ou/workbuddy-agent-apk/releases/download/v3.8.1
-curl -LO $BASE/WorkBuddy-3.8.1.apk
-curl -LO $BASE/WorkBuddy-3.8.1-debug.apk
+BASE=https://github.com/Hy-ou/workbuddy-agent-apk/releases/download/v3.8.2
+curl -LO $BASE/WorkBuddy-3.8.2.apk
+curl -LO $BASE/WorkBuddy-3.8.2-debug.apk
 curl -LO $BASE/SHA256SUMS
 ```
 
@@ -35,7 +35,7 @@ curl -LO $BASE/SHA256SUMS
 sha256sum -c SHA256SUMS                      # Linux / macOS / Git Bash
 # Get-FileHash .\WorkBuddy-3.2.0.apk -Algorithm SHA256   # Windows PowerShell
 
-adb install -r WorkBuddy-3.8.1.apk
+adb install -r WorkBuddy-3.8.2.apk
 ```
 
 debug 包与 release 包同签名，可互相覆盖安装，无需卸载。
@@ -52,14 +52,14 @@ debug 包与 release 包同签名，可互相覆盖安装，无需卸载。
 
    ```powershell
    gradle -p android assembleRelease
-   Copy-Item android/app/build/outputs/apk/release/app-release.apk release/WorkBuddy-3.8.1.apk
+   Copy-Item android/app/build/outputs/apk/release/app-release.apk release/WorkBuddy-3.8.2.apk
    ```
 
 2. 更新本目录的 `SHA256SUMS` 与 `RELEASE_NOTES-<version>.md` 并提交。
 3. 打 tag 并上传附件：
 
    ```powershell
-   pwsh tools/publish-release.ps1 -Tag v3.8.1 -Repo Hy-ou/workbuddy-agent-apk
+   pwsh tools/publish-release.ps1 -Tag v3.8.2 -Repo Hy-ou/workbuddy-agent-apk
    ```
 
    脚本会先校验 SHA-256，再调用 `gh release create/upload`；没有 `gh` 时会打印等价的 `curl` 命令。

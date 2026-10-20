@@ -35,6 +35,11 @@ object InstalledPlugins {
         save(context, next)
     }
 
+    /** 按插件 id 删除（修复旧版本按包名删不掉、导致 patch 残留 wb-notify 的问题）。 */
+    fun removeById(context: Context, id: String) {
+        save(context, list(context).filterNot { it.id == id })
+    }
+
     fun remove(context: Context, packageName: String) {
         save(context, list(context).filterNot { it.packageName == packageName })
     }
