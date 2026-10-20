@@ -193,7 +193,7 @@ try {
 "
         foreach ($e in $pz.Entries) {
             if ($e.FullName.EndsWith("/")) { continue }
-            $inc = ($e.FullName -like "dshroot/*") -or ($e.FullName -like "dshhome/*") -or
+            $inc = ($e.FullName -like "dshroot/*") -or ($e.FullName -like "dshhome/*") -or ($e.FullName -like "npm/*") -or
                    ($e.FullName -like "bin/*") -or ($e.FullName -like "runtime/etc/*")
             if (-not $inc) { continue }
             if ($e.FullName -eq "dshhome/cordis.patch.yml") { continue }

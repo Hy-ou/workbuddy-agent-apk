@@ -5,6 +5,27 @@
 
 ---
 
+## 3.6.0 — 2026-10-20
+
+### 新增
+
+- **内置 npm**：payload 增加 `npm/`（9.1 MB 未压缩，APK +3.1 MB），解压到 `dsh-home/npm`。
+- **社区插件一键安装**（`dsh/PluginInstaller.kt`）：`node npm-cli.js install <pkg>
+  --prefix dshroot/lib/node_modules/@deepseek-ai/dsh`，装完自动 insert 到 `cordis.patch.yml`；
+  支持卸载；UI 显示进度与失败原因。
+- **DSH 通知插件**（`dsh/NotifyPlugin.kt`）：`@workbuddy/dsh-tool-notify` 注册 `notify` 工具，
+  经宿主回环桥（`dsh/LocalBridge.kt`，127.0.0.1:7865 + `x-wb-token`）发系统通知；
+  插件位置与 bash-local 同级（`@deepseek-ai/dsh/node_modules/`）。
+- **扩展中心（CLI 工具）**：typescript/tsx/prettier/eslint/http-server/nodemon 一键装到
+  `home/tools`，`.bin` 加入内核 PATH。
+- 版本 3.6.0 / versionCode 10。
+
+### 验证
+
+- `testDebugUnitTest` + `lintDebug` 通过；真机确认 npm 已解压、notify 插件文件写入、
+  `cordis.patch.yml` 含 `wb-notify` insert；release APK 109.9 MB。
+
+---
 ## 3.5.0 — 2026-10-20
 
 ### 新增：通知、Shizuku 特权、扩展能力面板（参考 deepseek-harness-android-app 与 DSH Mobile）

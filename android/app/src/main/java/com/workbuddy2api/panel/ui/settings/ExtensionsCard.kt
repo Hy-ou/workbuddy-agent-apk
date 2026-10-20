@@ -14,8 +14,10 @@ import androidx.compose.material3.Text
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.DisposableEffect
 import androidx.compose.runtime.getValue
+import androidx.compose.runtime.mutableIntStateOf
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
+import androidx.compose.runtime.rememberCoroutineScope
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
@@ -34,6 +36,7 @@ import com.workbuddy2api.panel.ui.components.WbButton
 import com.workbuddy2api.panel.ui.components.WbCard
 import com.workbuddy2api.panel.ui.theme.LocalWbColors
 import com.workbuddy2api.panel.util.ShizukuShell
+import kotlinx.coroutines.launch
 import java.io.File
 
 /**
@@ -49,6 +52,7 @@ fun ExtensionsCard(modifier: Modifier = Modifier) {
     val wb = LocalWbColors.current
     val clipboard = LocalClipboardManager.current
     val manager = remember { DshManager.get(context) }
+    val scope = rememberCoroutineScope()
 
     var shizukuAvailable by remember { mutableStateOf(ShizukuShell.available()) }
     var shizukuGranted by remember { mutableStateOf(ShizukuShell.granted()) }
@@ -59,6 +63,10 @@ fun ExtensionsCard(modifier: Modifier = Modifier) {
         )
     }
     var copied by remember { mutableStateOf("") }
+    var busy by remember { mutableStateOf("") }
+    var note by remember { mutableStateOf("") }
+    var npmOk by remember { mutableStateOf(false) }
+    var tick by remember { mutableIntStateOf(0) }
 
     val lifecycleOwner = LocalLifecycleOwner.current
     DisposableEffect(lifecycleOwner) {
@@ -74,7 +82,11 @@ fun ExtensionsCard(modifier: Modifier = Modifier) {
         onDispose { lifecycleOwner.lifecycle.removeObserver(observer) }
     }
 
-    val toolchain = remember {
+    androidx.compose.runtime.LaunchedEffect(tick) {
+        npmOk = runCatching { manager.npmAvailable() }.getOrDefault(false)
+    }
+
+    val toolchain = remember(tick) {
         runCatching {
             val kernel = File(manager.kernelRootPath())
             listOf(
@@ -167,12 +179,91 @@ fun ExtensionsCard(modifier: Modifier = Modifier) {
                     Text(p.id, style = MaterialTheme.typography.bodySmall, color = wb.ink)
                     Text(p.desc.take(48), style = MaterialTheme.typography.labelSmall, color = wb.ink3)
                 }
+                val installed = runCatching { manager.pluginInstalled(p.packageName) }.getOrDefault(false)
+                WbButton(
+                    text = when {
+                        busy == p.packageName -> "处理中…"
+                        installed -> "卸载"
+                        else -> "安装"
+                    },
+                    onClick = {
+                        if (busy.isNotBlank()) return@WbButton
+                        busy = p.packageName
+                        scope.launch {
+                            val r = if (installed) manager.uninstallPlugin(p.packageName)
+                            else manager.installPlugin(p.packageName)
+                            note = if (r.ok) {
+                                "${p.packageName} 已${if (installed) "卸载" else "安装"}，重启内核后生效"
+                            } else {
+                                "失败：${r.output.take(160)}"
+                            }
+                            busy = ""
+                            tick++
+                        }
+                    },
+                    primary = !installed,
+                )
                 WbButton(if (copied == p.packageName) "已复制" else "复制包名", onClick = {
                     clipboard.setText(AnnotatedString(p.packageName))
                     copied = p.packageName
                 })
             }
         }
+        Spacer(Modifier.height(12.dp))
+
+        // 扩展中心：用内置 npm 把命令行工具装到内核 PATH
+        Text("扩展中心（CLI 工具）", style = MaterialTheme.typography.bodyMedium, color = wb.ink)
+        Text(
+            if (npmOk) "用内置 npm 装到 home/tools，其 bin 已加入内核 PATH，Agent 可直接调用。"
+            else "内核尚未内置 npm（需 3.6.0+ 内核资产），安装不可用。",
+            style = MaterialTheme.typography.bodySmall,
+            color = if (npmOk) wb.ink3 else wb.warn,
+        )
+        val tools = listOf(
+            "typescript" to "tsc 编译器",
+            "tsx" to "直接运行 TypeScript",
+            "prettier" to "代码格式化",
+            "eslint" to "JS/TS 静态检查",
+            "http-server" to "静态文件服务器",
+            "nodemon" to "文件变更自动重启",
+        )
+        tools.forEach { (pkg, desc) ->
+            val installed = runCatching { manager.toolInstalled(pkg) }.getOrDefault(false)
+            Row(
+                Modifier.fillMaxWidth().padding(vertical = 2.dp),
+                verticalAlignment = Alignment.CenterVertically,
+                horizontalArrangement = Arrangement.spacedBy(8.dp),
+            ) {
+                Column(Modifier.weight(1f)) {
+                    Text(pkg, style = MaterialTheme.typography.bodySmall, color = wb.ink)
+                    Text(desc, style = MaterialTheme.typography.labelSmall, color = wb.ink3)
+                }
+                WbButton(
+                    text = when {
+                        busy == "tool:$pkg" -> "处理中…"
+                        installed -> "卸载"
+                        else -> "安装"
+                    },
+                    onClick = {
+                        if (busy.isNotBlank() || !npmOk) return@WbButton
+                        busy = "tool:$pkg"
+                        scope.launch {
+                            val r = if (installed) manager.uninstallTool(pkg) else manager.installTool(pkg)
+                            note = if (r.ok) "$pkg 已${if (installed) "卸载" else "安装"}"
+                            else "失败：${r.output.take(160)}"
+                            busy = ""
+                            tick++
+                        }
+                    },
+                    primary = !installed,
+                )
+            }
+        }
+        if (note.isNotBlank()) {
+            Spacer(Modifier.height(6.dp))
+            Text(note, style = MaterialTheme.typography.bodySmall, color = wb.ok)
+        }
+
         Spacer(Modifier.height(6.dp))
         Mono("来源: Soodok/Deepseek-Harness-Local-Android 的社区插件清单")
     }

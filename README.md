@@ -65,7 +65,7 @@
 
 ```bash
 # 从 Release 页面下载对应 APK 后安装
-adb install -r WorkBuddy-3.5.0.apk
+adb install -r WorkBuddy-3.6.0.apk
 ```
 
 首次启动后：自动拉起内置网关（`127.0.0.1:7863`），在「账号」页扫码/登录添加账号，即可使用；
@@ -242,6 +242,7 @@ adb shell am start -n com.workbuddy2api.panel/.MainActivity --ei tab 2 --es mode
 | 3.3.0 | 宿主层增强：系统 CA、WebView 自检、状态栏跟随、电池白名单、更新检查、内核树拆分外置、运行体检 |
 | 3.4.0 | P2：插件开关、安全模式、备份/还原、我的补丁 |
 | 3.5.0 | AI 通知、Shizuku 特权通道、扩展能力面板（工具链状态 + 社区插件清单） |
+| 3.6.0 | 内置 npm、社区插件一键安装、DSH 通知工具、扩展中心（npm CLI） |
 
 ---
 
@@ -274,17 +275,17 @@ APK 体积约 107 / 117 MB（超出 GitHub 单文件 100 MB 限制），因此**
 
 | 附件 | 大小 | 说明 |
 |---|---|---|
-| `WorkBuddy-3.5.0.apk` | 106.8 MB | 正式包，`adb install -r` 即可 |
-| `WorkBuddy-3.5.0-debug.apk` | 117.5 MB | 调试包（`run-as`、WebView 远程调试） |
+| `WorkBuddy-3.6.0.apk` | 106.8 MB | 正式包，`adb install -r` 即可 |
+| `WorkBuddy-3.6.0-debug.apk` | 117.5 MB | 调试包（`run-as`、WebView 远程调试） |
 | `SHA256SUMS` | — | 校验值 |
 
 ```bash
 # 下载（二选一）
-gh release download v3.5.0 -R Hy-ou/workbuddy-agent-apk -p "*.apk"
+gh release download v3.6.0 -R Hy-ou/workbuddy-agent-apk -p "*.apk"
 # 或浏览器打开 https://github.com/Hy-ou/workbuddy-agent-apk/releases/latest
 
 sha256sum -c SHA256SUMS
-adb install -r WorkBuddy-3.5.0.apk
+adb install -r WorkBuddy-3.6.0.apk
 ```
 
 发布新版本的流程见 [release/README.md](release/README.md)，上传脚本为

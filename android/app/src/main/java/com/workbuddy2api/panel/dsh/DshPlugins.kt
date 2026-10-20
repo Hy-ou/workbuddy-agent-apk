@@ -119,6 +119,12 @@ object DshPlugins {
         sb.appendLine("      config:")
         sb.appendLine("        cwd: !!js (process.env.DSH_WORKSPACE || process.cwd())")
         sb.appendLine("        timeoutMs: 60000")
+        // 一键安装的社区插件 / 内置 notify 插件：逐个 insert
+        for (entry in InstalledPlugins.list(context)) {
+            if (entry.id.isBlank() || entry.packageName.isBlank()) continue
+            sb.appendLine("    - id: " + entry.id)
+            sb.appendLine("      name: '" + entry.packageName + "'")
+        }
 
         val target = File(homeDir, "dshhome/cordis.patch.yml")
         target.parentFile?.mkdirs()

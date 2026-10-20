@@ -129,6 +129,12 @@ class DshManager private constructor(private val app: Application) {
         val kernel = kernelDir()
         val home = homeDir()
         ensureLayout(kernel, home)
+        // 宿主回环桥（插件发通知等）；失败不影响内核启动
+        runCatching { LocalBridge.start(app) }
+        // 内置 notify 插件：写入内核 node_modules 并登记到 patch 的 insert 列表
+        if (runCatching { NotifyPlugin.ensure(kernel) }.getOrDefault(false)) {
+            InstalledPlugins.add(app, NotifyPlugin.ID, NotifyPlugin.PACKAGE)
+        }
         syncManagedPatch(home)
         val replayed = runCatching { UserPatches.replay(kernel, home) }.getOrDefault(0)
         val node = File(app.applicationInfo.nativeLibraryDir, "libdshnode.so")
@@ -156,7 +162,9 @@ class DshManager private constructor(private val app: Application) {
         env["TMPDIR"] = app.cacheDir.absolutePath
         env["TERM"] = "xterm"
         env["SHELL"] = "/system/bin/sh"
+        env["WB_BRIDGE_TOKEN"] = LocalBridge.token(app)
         env["PATH"] = listOf(
+            File(home, "tools/node_modules/.bin").absolutePath,
             File(kernel, "bin").absolutePath,
             app.applicationInfo.nativeLibraryDir,
             "/system/bin", "/system/xbin",
@@ -349,6 +357,36 @@ class DshManager private constructor(private val app: Application) {
 
     /** 清空我的补丁，并让内核树下次启动重新解压（回出厂）。 */
     fun clearMyPatches() = runCatching { UserPatches.clear(homeDir(), kernelDir()) }
+
+    fun npmAvailable(): Boolean = PluginInstaller.npmAvailable(app, homeDir())
+
+    fun pluginInstalled(pkg: String): Boolean = PluginInstaller.pluginInstalled(kernelDir(), pkg)
+
+    suspend fun installPlugin(pkg: String): PluginInstaller.Result {
+        val r = PluginInstaller.installPlugin(app, kernelDir(), homeDir(), pkg)
+        if (r.ok) {
+            InstalledPlugins.add(app, pkg.substringAfterLast('/'), pkg)
+            syncManagedPatch(homeDir())
+        }
+        return r
+    }
+
+    suspend fun uninstallPlugin(pkg: String): PluginInstaller.Result {
+        val r = PluginInstaller.uninstallPlugin(app, kernelDir(), homeDir(), pkg)
+        if (r.ok) {
+            InstalledPlugins.remove(app, pkg)
+            syncManagedPatch(homeDir())
+        }
+        return r
+    }
+
+    fun toolInstalled(pkg: String): Boolean = PluginInstaller.toolInstalled(homeDir(), pkg)
+
+    suspend fun installTool(pkg: String): PluginInstaller.Result =
+        PluginInstaller.installTool(app, kernelDir(), homeDir(), pkg)
+
+    suspend fun uninstallTool(pkg: String): PluginInstaller.Result =
+        PluginInstaller.uninstallTool(app, kernelDir(), homeDir(), pkg)
 
     fun exportBackup(uri: Uri): Result<DshBackup.ExportResult> =
         DshBackup.export(app, homeDir(), uri)

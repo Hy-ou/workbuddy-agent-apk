@@ -199,14 +199,15 @@ cd android && gradle test
     启动前自动回放；「清空补丁」删除补丁并让内核树重新解压。
   - 新增单测 `DshPluginIdTest`（包名 → 插件 id 映射、内置禁用策略）。
 
-- **3.5.0（2026-10-20）**：通知能力 + Shizuku 特权通道 + 扩展能力面板。
-  - **AI 通知**（`util/NotificationCenter.kt`）：原生助手新增 `notify` 工具
-    （`{"tool":"notify","title":"…","text":"…"}`），任务完成/需要关注时推送通知栏。
-  - **Shizuku 免 root 特权**（`util/ShizukuShell.kt`）：用户安装 Shizuku 并授权后，
-    助手新增 `shell` 工具，可装应用、模拟输入、截屏、改系统设置（`pm/input/screencap/settings`）。
-    未安装/未授权时自动降级，不打扰用户；Manifest 增加 `moe.shizuku.manager.permission.API_V23`
-    与 `ShizukuProvider`。
-  - **扩展能力面板**（`ui/settings/ExtensionsCard.kt`）：通知状态、Shizuku 状态与一键授权、
-    工具链状态（node/npm/git/python 是否内置）、**社区插件精选清单**
-    （12 个 dsh 生态插件，一键复制包名到 DSH 插件面板安装）。
-  - Shizuku 依赖：`dev.rikka.shizuku:api` + `provider` 13.1.5；`newProcess` 为内部方法，用反射调用。
+- **3.6.0（2026-10-20）**：社区插件一键安装 + DSH 通知插件 + 扩展中心（npm CLI）。
+  - **内置 npm**：payload 增加 npm 目录（9.1 MB 未压缩 / +3.1 MB APK），内核可用它安装插件与 CLI。
+  - **社区插件一键安装**（`dsh/PluginInstaller.kt`）：扩展能力面板里对 12 个精选插件
+    直接「安装/卸载」，走 `node npm-cli.js install --prefix dshroot/lib/node_modules/@deepseek-ai/dsh`，
+    装完自动写入 `cordis.patch.yml` 的 insert 列表，重启内核生效。
+  - **DSH 通知插件**（`dsh/NotifyPlugin.kt`）：内置 `@workbuddy/dsh-tool-notify`，
+    Agent 可直接调用 `notify` 工具；插件 POST 到宿主回环桥 `127.0.0.1:7865`（随机 token），
+    由 App 发系统通知。插件安装位置与 bash-local 同级（`@deepseek-ai/dsh/node_modules/`）。
+  - **宿主回环桥**（`dsh/LocalBridge.kt`）：只监听 127.0.0.1、要求 `x-wb-token`，
+    目前提供 `/notify`、`/health`，后续可扩展 `/shell`。
+  - **扩展中心（CLI 工具）**：typescript / tsx / prettier / eslint / http-server / nodemon
+    一键装到 `home/tools`，其 `.bin` 已加入内核 PATH。
