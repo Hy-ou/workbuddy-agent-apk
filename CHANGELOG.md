@@ -5,6 +5,17 @@
 
 ---
 
+## 3.9.2 — 2026-10-21
+
+### 修复
+
+- 设置页卸载失败：`pnpm remove` 不支持 `--registry`（Unknown option），改为仅安装时传。
+- DSH 启动 `Cannot find package`：卸载后 patch 残留 insert；改为内核启动时以磁盘为准
+  丢弃失效登记，卸载时无条件清登记并重写 patch。
+- 验证：卸载 dsh-whale-widget、安装 dshmarket 均成功；重启内核无 warning。
+- 版本 3.9.2 / versionCode 19。
+
+---
 ## 3.9.1 — 2026-10-21
 
 ### 修复

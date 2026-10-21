@@ -156,6 +156,14 @@ class DshManager private constructor(private val app: Application) {
         // profile 的 pnpm 元数据和内置 pnpm 版本对齐，否则 DSH 自己的插件安装会报 UNEXPECTED_STORE
         runCatching { PluginInstaller.alignStoreDir(app, home) }
         InstalledPlugins.removeById(app, NotifyPlugin.ID)
+        // 以磁盘为准：包已被卸载（或安装失败）的登记项直接丢弃，避免 patch 里留下无法 import 的条目
+        runCatching {
+            val prof = File(home, "dshhome/profiles/web/node_modules")
+            val all = InstalledPlugins.list(app)
+            all
+                .filter { !File(prof, it.packageName.replace("/", File.separator)).isDirectory }
+                .forEach { InstalledPlugins.remove(app, it.packageName) }
+        }
         syncManagedPatch(home)
         val replayed = runCatching { UserPatches.replay(kernel, home) }.getOrDefault(0)
         val node = File(app.applicationInfo.nativeLibraryDir, "libdshnode.so")
@@ -431,10 +439,9 @@ class DshManager private constructor(private val app: Application) {
 
     suspend fun uninstallPlugin(pkg: String): PluginInstaller.Result {
         val r = PluginInstaller.plugin(app, homeDir(), pkg, "uninstall")
-        if (r.ok) {
-            InstalledPlugins.remove(app, pkg)
-            syncManagedPatch(homeDir())
-        }
+        // 即使 pnpm 报错（例如包已不在 dependencies 里）也要清登记，否则 patch 会残留
+        InstalledPlugins.remove(app, pkg)
+        syncManagedPatch(homeDir())
         return r
     }
 

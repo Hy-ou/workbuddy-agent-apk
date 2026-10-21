@@ -324,3 +324,16 @@ ImageMagick / OpenSSH / ADB / Vim 等 Termux 包）：**不能直接解包就用
   - **验证（应用进程内，等价内核）**：
     `spawnSync("pnpm", ["view","dshmarket",…])` → `status=0`，
     返回 `{"name":"dshmarket","version":"1.66.45"}`；`pnpm --version` → 10.34.7。
+
+- **3.9.2（2026-10-21）**：修复「设置页卸载失败」与「DSH 启动报 Cannot find package」。
+  - **卸载失败根因**：`pnpm remove` **不接受 `--registry`**，我们复用了安装的参数，
+    于是 `ERROR Unknown option: 'registry'`，包没被删掉，但界面/登记已经变了。
+    现在只有 `add` 才传 `--registry`。
+  - **启动报错根因**：卸载（或安装失败）后 `cordis.patch.yml` 仍留着该插件的 insert，
+    包却已不在 `node_modules` → 每次启动 `Cannot find package 'xxx' imported from profiles/web`。
+    现在内核启动时**以磁盘为准**：`InstalledPlugins` 里包已不存在的条目自动丢弃，
+    并立即重写 patch；卸载路径也改成「无论 pnpm 是否报错都先清登记」。
+  - **真机验证**：
+    卸载 `dsh-whale-widget` → `Done in 831ms using pnpm v10.34.7`，包从 node_modules 消失，
+    patch 与登记同步移除；安装 `dshmarket` → `Done in 13.6s`；重启内核后
+    最近一次启动 **4 行日志、无 warning、无未激活条目**。

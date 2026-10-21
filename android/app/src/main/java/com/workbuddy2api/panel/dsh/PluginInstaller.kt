@@ -71,7 +71,8 @@ object PluginInstaller {
                 add(pkg)
                 add("--no-audit"); add("--no-fund"); add("--loglevel=error")
             }
-            add("--registry=$REGISTRY")
+            // pnpm remove 不接受 --registry（Unknown option），只有安装时需要指定源
+            if (action != "uninstall") add("--registry=$REGISTRY")
         }
         runCommand(context, homeDir, dir, cmd, 240_000)
     }

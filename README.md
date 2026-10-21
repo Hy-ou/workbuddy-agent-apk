@@ -57,6 +57,19 @@
 - 「设置 → 文件访问」申请 `MANAGE_EXTERNAL_STORAGE`，授权后 DSH 工作区切到 `/storage/emulated/0/WorkBuddy`，
   Agent 可直接检索与操作手机文件。
 
+### 界面预览
+
+<p align="center">
+  <img src="docs/screenshots/overview.jpg" width="45%" alt="总览页：账号池状态、剩余积分、快捷操作与账号健康" />
+  <img src="docs/screenshots/dsh-console.jpg" width="45%" alt="DSH 内核控制台：分析当前运行环境的对话与工具调用" />
+</p>
+
+| 总览 | DSH 内核控制台 |
+|---|---|
+| 账号池可用率 100%、剩余积分 4,170、快捷操作（全部签到 / 刷新余额 / 全部旅行 / 全部活动 / 全部保活）、按风险排序的账号健康与最近请求日志 | 独立进程运行 `dsh web`，WebView 承载完整控制台：对话 / 轨迹切换、工具调用与执行通道诊断、737K token 上下文 |
+
+> 截图取自真机运行（面板 `v1.13.0-panel`、模型 `Deepseek-V4.1`）；版本号与具体数值以实际运行为准。
+
 ---
 
 ## 2. 快速开始
@@ -65,7 +78,7 @@
 
 ```bash
 # 从 Release 页面下载对应 APK 后安装
-adb install -r WorkBuddy-3.9.1.apk
+adb install -r WorkBuddy-3.9.2.apk
 ```
 
 首次启动后：自动拉起内置网关（`127.0.0.1:7863`），在「账号」页扫码/登录添加账号，即可使用；
@@ -275,17 +288,17 @@ APK 体积约 107 / 117 MB（超出 GitHub 单文件 100 MB 限制），因此**
 
 | 附件 | 大小 | 说明 |
 |---|---|---|
-| `WorkBuddy-3.9.1.apk` | 106.8 MB | 正式包，`adb install -r` 即可 |
-| `WorkBuddy-3.9.1-debug.apk` | 117.5 MB | 调试包（`run-as`、WebView 远程调试） |
+| `WorkBuddy-3.9.2.apk` | 106.8 MB | 正式包，`adb install -r` 即可 |
+| `WorkBuddy-3.9.2-debug.apk` | 117.5 MB | 调试包（`run-as`、WebView 远程调试） |
 | `SHA256SUMS` | — | 校验值 |
 
 ```bash
 # 下载（二选一）
-gh release download v3.9.1 -R Hy-ou/workbuddy-agent-apk -p "*.apk"
+gh release download v3.9.2 -R Hy-ou/workbuddy-agent-apk -p "*.apk"
 # 或浏览器打开 https://github.com/Hy-ou/workbuddy-agent-apk/releases/latest
 
 sha256sum -c SHA256SUMS
-adb install -r WorkBuddy-3.9.1.apk
+adb install -r WorkBuddy-3.9.2.apk
 ```
 
 发布新版本的流程见 [release/README.md](release/README.md)，上传脚本为

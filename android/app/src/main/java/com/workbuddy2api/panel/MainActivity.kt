@@ -41,6 +41,7 @@ class MainActivity : ComponentActivity() {
         runCatching { com.workbuddy2api.panel.dsh.DshManager.get(applicationContext).refreshBinShims() }
         debugToolchainInstall()
         debugPluginInstall()
+        debugPluginRemove()
         debugExec()
     }
 
@@ -75,6 +76,19 @@ class MainActivity : ComponentActivity() {
                 android.util.Log.i("wbPlugin", "RESULT ok=" + r.ok + " msg=" + r.output)
             }.onFailure { android.util.Log.e("wbPlugin", "EXCEPTION", it) }
         }, "wb-plugin-debug").start()
+    }
+
+    /** 仅调试包：`--es wbPluginRemove <包名>` 走一次社区插件卸载（与界面按钮同一条路径）。 */
+    private fun debugPluginRemove() {
+        if (!BuildConfig.DEBUG) return
+        val pkg = intent?.getStringExtra("wbPluginRemove")?.takeIf { it.isNotBlank() } ?: return
+        Thread({
+            runCatching {
+                val manager = com.workbuddy2api.panel.dsh.DshManager.get(applicationContext)
+                val r = kotlinx.coroutines.runBlocking { manager.uninstallPlugin(pkg) }
+                android.util.Log.i("wbPlugin", "REMOVE ok=" + r.ok + " msg=" + r.output)
+            }.onFailure { android.util.Log.e("wbPlugin", "EXCEPTION", it) }
+        }, "wb-plugin-remove").start()
     }
 
     /** 仅调试包：`--es wbExec "<命令>"`，用内核等价环境（应用进程）执行并打印输出。 */
