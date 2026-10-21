@@ -337,3 +337,17 @@ ImageMagick / OpenSSH / ADB / Vim 等 Termux 包）：**不能直接解包就用
     卸载 `dsh-whale-widget` → `Done in 831ms using pnpm v10.34.7`，包从 node_modules 消失，
     patch 与登记同步移除；安装 `dshmarket` → `Done in 13.6s`；重启内核后
     最近一次启动 **4 行日志、无 warning、无未激活条目**。
+
+- **3.9.3（2026-10-21）**：真正修好 Web 端 `spawn pnpm EACCES`。
+  - **根因**：内核进程的 `PATH` 里**漏了 `home/bin`**（之前几版插入 `toolchain/usr/bin` 时被覆盖）。
+    于是 `pnpm` 的解析顺序变成
+    `tools/.bin → toolchain/usr/bin → /storage/emulated/0/WorkBuddy/dsh/bin`，
+    最后一个在 `/sdcard` 上 **noexec**，命中就 `EACCES`。
+    用 `/proc/<node-pid>/environ` dump 出来确认了这一点。
+  - **修复**：`PATH` 第一位固定为 `home/bin`（里面的 pnpm/npm/node/工具链命令都是指向
+    jniLibs 启动器的符号链接）。
+  - **验证（用内核进程真实的 PATH 复现）**：
+    `which pnpm` → `…/files/dsh-home/bin/pnpm`；
+    `pnpm view dshmarket name version description dsh --json --registry=… --config.fetch-retries=0`
+    → 返回 `{"name":"dshmarket","version":"1.66.45","description":"…"}`。
+  - 注意：`PATH` 在内核启动时注入，**升级后需重启内核**才生效。

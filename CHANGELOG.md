@@ -5,6 +5,16 @@
 
 ---
 
+## 3.9.3 — 2026-10-21
+
+### 修复
+
+- Web 端 `spawn pnpm EACCES` 真正根因：内核 PATH 缺 `home/bin`，`pnpm` 落到 /sdcard 上
+  noexec 的 Termux 版；改为 PATH 首位固定 `home/bin`。
+- 验证：`which pnpm` → home/bin/pnpm；`pnpm view dshmarket …` 正常返回插件信息。
+- 版本 3.9.3 / versionCode 20。
+
+---
 ## 3.9.2 — 2026-10-21
 
 ### 修复

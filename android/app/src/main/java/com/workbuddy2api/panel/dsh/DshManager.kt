@@ -202,6 +202,8 @@ class DshManager private constructor(private val app: Application) {
         env["WB_TOOLS_BIN"] = File(home, "tools/node_modules/.bin").absolutePath
         env["WB_DSH_HOME"] = home.absolutePath
         env["PATH"] = listOf(
+            // home/bin 必须在最前：里面的 pnpm/npm/node/工具链快捷方式都是指向 jniLibs 启动器的符号链接
+            File(home, "bin").absolutePath,
             File(home, "tools/node_modules/.bin").absolutePath,
             File(home, "toolchain/usr/bin").absolutePath,
             File(kernel, "bin").absolutePath,
