@@ -156,6 +156,12 @@ class DshManager private constructor(private val app: Application) {
         // profile 的 pnpm 元数据和内置 pnpm 版本对齐，否则 DSH 自己的插件安装会报 UNEXPECTED_STORE
         runCatching { PluginInstaller.alignStoreDir(app, home) }
         InstalledPlugins.removeById(app, NotifyPlugin.ID)
+        // 内置移动端插件：wb_sh / wb_env / wb_shizuku / wb_notify + Android 环境手册。
+        // 写进 profile 的 node_modules（DSH 用 profile 作 baseUrl 解析 insert 里的包名），
+        // 并登记到 InstalledPlugins —— syncManagedPatch 会把 insert 行写进 cordis.patch.yml。
+        if (MobilePlugin.ensure(app, home)) {
+            InstalledPlugins.add(app, MobilePlugin.ID, MobilePlugin.PACKAGE)
+        }
         // 以磁盘为准：包已被卸载（或安装失败）的登记项直接丢弃，避免 patch 里留下无法 import 的条目
         runCatching {
             val prof = File(home, "dshhome/profiles/web/node_modules")
@@ -520,7 +526,9 @@ class DshManager private constructor(private val app: Application) {
                     runCatching { android.system.Os.symlink(shim.absolutePath, link.absolutePath) }
                 }
             }
-            for (name in listOf("pnpm", "npm", "node")) {
+            // bash / sh：Android 只有 mksh，官方 bash 工具执行的是 spawn("bash", ...)，
+            // 这里让 PATH 里的 bash 落到启动器，由它 exec /system/bin/sh（见 shim.c）。
+            for (name in listOf("pnpm", "npm", "node", "bash", "sh")) {
                 val link = File(bin, name)
                 // 每次启动重建：应用更新后 nativeLibraryDir 路径会变，旧链接会失效
                 runCatching { link.delete() }

@@ -1,0 +1,9 @@
+{
+  "name": "@workbuddy/dsh-mobile",
+  "version": "1.0.0",
+  "description": "WorkBuddy Android 执行通道与环境手册：wb_sh / wb_env / wb_shizuku / wb_notify",
+  "type": "module",
+  "main": "index.js",
+  "license": "MIT",
+  "private": true
+}

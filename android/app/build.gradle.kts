@@ -13,8 +13,8 @@ android {
         applicationId = "com.workbuddy2api.panel"
         minSdk = 24
         targetSdk = 35
-        versionCode = 20
-        versionName = "3.9.3"
+        versionCode = 21
+        versionName = "3.10.0"
         vectorDrawables { useSupportLibrary = true }
         ndk { abiFilters += listOf("arm64-v8a", "x86_64") }
     }
@@ -36,6 +36,12 @@ android {
 
     kotlinOptions {
         jvmTarget = "17"
+    }
+
+    // DSH 插件源码放在 android/dsh/assets/，构建时并入 APK assets；
+    // App 启动内核前把它们写进 dshhome/profiles/web/node_modules（见 dsh/MobilePlugin.kt）。
+    sourceSets {
+        getByName("main").assets.srcDir(file("../dsh/assets"))
     }
 
     buildFeatures {

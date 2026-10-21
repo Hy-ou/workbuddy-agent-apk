@@ -129,6 +129,22 @@ cd android && gradle test
 
 ## 变更记录
 
+- **3.10.0（2026-10-21）**：内置 DSH 插件 `@workbuddy/dsh-mobile`（Android 执行通道 + 环境手册）。
+  背景：真机上 Agent 调 bash 必失败 —— `dsh-bash-local` 执行 `spawn("bash", …)`，而 Android 只有
+  `/system/bin/sh`（mksh）；且内核提示词里没有任何「这台手机有什么」的事实，模型只能猜。
+  做法（插件而非预设，理由见 [../docs/mobile-agent-plugin.md](../docs/mobile-agent-plugin.md)）：
+  - 插件源码 `dsh/assets/dsh-plugins/wb-mobile/`（零依赖 ESM，只 import `node:`），
+    构建时经 `sourceSets.main.assets.srcDir("../dsh/assets")` 并入 APK；
+  - `dsh/MobilePlugin.kt` 每次启动内核前把它复制到
+    `dshhome/profiles/web/node_modules/@workbuddy/dsh-mobile` 并登记到 `InstalledPlugins`，
+    由托管 patch 写入 insert 行（id `wb-mobile`）；
+  - 工具：`wb_sh`（`/system/bin/sh`）、`wb_env`（体检）、`wb_shizuku`（桥 → uid 2000）、`wb_notify`；
+    提示词段 `workbuddy:android-environment`；
+  - `home/bin` 增加 `bash`/`sh` 链接 + `shim.c` 回退到 `/system/bin/sh`（含 `#!/bin/sh` shebang），
+    官方 bash 工具因此也能跑；
+  - 宿主桥新增 `POST /shell`，`POST /health` 返回 Shizuku 状态；
+  - 离线自检 `node dsh/tests/wb-mobile.selftest.mjs`；版本 3.10.0 / versionCode 21。
+
 - **2.0.1（2026-10-20）**：修复真机上「总览」整页报错
   `Unexpected JSON token ... in_flight_full` —— 服务端 `in_flight_full` 是账号计数（整数），
   客户端模型误声明为布尔值；已改为 `Int` 并同步提示文案。同时把内置 Go 网关按

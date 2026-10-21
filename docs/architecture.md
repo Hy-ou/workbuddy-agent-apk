@@ -98,6 +98,34 @@ libdshnode.so --expose-internals dshroot/lib/node_modules/@deepseek-ai/dsh/lib/b
 - 放行 `about/data/blob/javascript` 协议，实现 `onShowFileChooser`（附件），
   并注入视口修复脚本（见 [troubleshooting.md](troubleshooting.md#4-dsh-控制台按钮点击无反应)）。
 
+### 4.5 内置 DSH 插件 `@workbuddy/dsh-mobile`
+
+Android 上官方 `bash` 工具必然失败（`dsh-bash-local` 执行的是 `spawn("bash", …)`，而系统只有
+`/system/bin/sh`），模型也不知道这台手机的权限与工具链。宿主因此随 APK 落地一个零依赖插件：
+
+```
+assets/dsh-plugins/wb-mobile/{package.json,index.js,README.md}
+        │ DshManager.doStart() → MobilePlugin.ensure()
+        ▼
+dsh-home/dshhome/profiles/web/node_modules/@workbuddy/dsh-mobile/   ← 必须在 profile（loader 的 baseUrl）
+        │ InstalledPlugins.add() → DshPlugins.writePatch()
+        ▼
+dsh-home/dshhome/cordis.patch.yml 的 insert 行（id: wb-mobile）
+        │ 内核启动时加载
+        ▼
+工具：wb_sh（/system/bin/sh）/ wb_env（体检）/ wb_shizuku（桥 → uid 2000）/ wb_notify
+提示词段：workbuddy:android-environment（order 1050）
+```
+
+- `wb_sh` 走 `ctx.subprocess`（惰性获取），输出受管（48 KB + spill），带超时与取消；
+- `wb_shizuku` / `wb_notify` 走宿主回环桥 `127.0.0.1:7865`（`POST /shell`、`POST /notify`，
+  要求 `x-wb-token`），桥只监听回环；
+- `home/bin` 里额外有 `bash`/`sh` 链接指向 `libwbnode_shim.so`，启动器把它们落到
+  `/system/bin/sh`，官方 bash 工具因此也能跑（POSIX 语法）；`#!/bin/bash`、`#!/bin/sh` 的脚本同理。
+
+设计与取舍见 [mobile-agent-plugin.md](mobile-agent-plugin.md)；离线自检：
+`node android/dsh/tests/wb-mobile.selftest.mjs`。
+
 ---
 
 ## 5. 数据层与状态
@@ -125,6 +153,8 @@ DSH 的 bash / 文件 / 检索工具（以本 App UID 运行）可直接读写�
 ```
 
 未授权时回退到 `getExternalFilesDir()/workspace`，保证内核仍可运行，只是看不到共享存储。
+
+这个目录同时是内核 bash / `wb_sh` 的默认 cwd（`DSH_WORKSPACE`），也是环境手册里告诉模型的工作区。
 
 ---
 

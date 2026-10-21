@@ -37,6 +37,22 @@ static void exec_linker(const char *target, char **argv) {
     exit(127);
 }
 
+/* Android 没有 bash：把 bash/sh 落到 /system/bin/sh（mksh）。
+ * 官方 bash 工具执行的是 spawn("bash", "-c", ...)，PATH 首位是 home/bin，
+ * 里面的 bash 符号链接指向本启动器，于是命令能跑起来（只支持 POSIX 语法）。 */
+static int exec_system_sh(char **argv) {
+    int argc = 0;
+    while (argv[argc]) argc++;
+    char **args = calloc((size_t)argc + 1, sizeof(char *));
+    if (!args) return 127;
+    args[0] = (char *)"/system/bin/sh";
+    for (int i = 1; i < argc; i++) args[i] = argv[i];
+    args[argc] = NULL;
+    execv("/system/bin/sh", args);
+    perror("execv /system/bin/sh");
+    return 127;
+}
+
 int main(int argc, char **argv) {
     const char *self = (argc > 0 && argv[0]) ? argv[0] : "";
     const char *base = strrchr(self, '/');
@@ -86,7 +102,11 @@ int main(int argc, char **argv) {
     target[0] = 0;
     if (env1) { snprintf(target, sizeof(target), "%s/%s", env1, base); if (!exists(target)) target[0] = 0; }
     if (!target[0] && env2) { snprintf(target, sizeof(target), "%s/%s", env2, base); if (!exists(target)) target[0] = 0; }
-    if (!target[0]) { fprintf(stderr, "wbexec: target not found for %s\n", base); return 127; }
+    if (!target[0]) {
+        if (!strcmp(base, "bash") || !strcmp(base, "sh")) return exec_system_sh(argv);
+        fprintf(stderr, "wbexec: target not found for %s\n", base);
+        return 127;
+    }
 
     /* 判断是 ELF 还是脚本 */
     int fd = open(target, O_RDONLY);
@@ -130,6 +150,8 @@ int main(int argc, char **argv) {
                 static char mapped2[4096];
                 snprintf(mapped2, sizeof(mapped2), "%s/%s", env1 ? env1 : "", b ? b + 1 : interp);
                 if (exists(mapped2)) interp = mapped2;
+                /* #!/bin/bash、#!/usr/bin/env bash 在 Android 上并不存在 -> 用系统 shell */
+                else if (b && (!strcmp(b + 1, "bash") || !strcmp(b + 1, "sh"))) interp = (char *)"/system/bin/sh";
             }
         }
         /* 解释器同样需要 linker64（它是 ELF） */
@@ -143,8 +165,12 @@ int main(int argc, char **argv) {
         args[k++] = target;
         for (int m = 1; m < cnt; m++) args[k++] = argv[m];
         args[k] = NULL;
-        execv(LINKER, (char *const[]){ (char *)LINKER, args[0], NULL });
-        /* 上面这行只是兜底；正常走下面的完整参数 */
+        /* 系统 shell 可以直接 exec；工具链里的解释器是 ELF，需要 linker64 加载 */
+        if (!strcmp(interp, "/system/bin/sh")) {
+            execv(interp, args);
+            perror("execv /system/bin/sh for script");
+            return 127;
+        }
         char **full = calloc((size_t)k + 2, sizeof(char *));
         if (!full) return 127;
         full[0] = (char *)LINKER;

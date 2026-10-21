@@ -56,6 +56,10 @@
 - 「设置 → 助手引擎」可在**原生助手 / DSH 内核**之间切换，选择持久化。
 - 「设置 → 文件访问」申请 `MANAGE_EXTERNAL_STORAGE`，授权后 DSH 工作区切到 `/storage/emulated/0/WorkBuddy`，
   Agent 可直接检索与操作手机文件。
+- **内置移动端插件** `@workbuddy/dsh-mobile`：给内核补上真正能跑的执行通道
+  （`wb_sh` = `/system/bin/sh`、`wb_shizuku` = Shizuku uid 2000、`wb_env` 体检、`wb_notify` 通知），
+  并把「这台手机有什么」写成 system prompt 里的环境手册，避免 Agent 反复调用不存在的 bash。
+  详见 [docs/mobile-agent-plugin.md](docs/mobile-agent-plugin.md)。
 
 ### 界面预览
 
@@ -78,7 +82,7 @@
 
 ```bash
 # 从 Release 页面下载对应 APK 后安装
-adb install -r WorkBuddy-3.9.3.apk
+adb install -r WorkBuddy-3.10.0.apk
 ```
 
 首次启动后：自动拉起内置网关（`127.0.0.1:7863`），在「账号」页扫码/登录添加账号，即可使用；
@@ -133,7 +137,7 @@ cd android
 | 项 | 版本 |
 |---|---|
 | 应用包名 | `com.workbuddy2api.panel` |
-| 应用版本 | **3.2.0**（versionCode 6） |
+| 应用版本 | **3.10.0**（versionCode 21） |
 | minSdk / targetSdk / compileSdk | 24 / 35 / 35 |
 | Kotlin | 2.0.21 |
 | AGP / Gradle | 8.7.3 / 8.10.2 |
@@ -163,6 +167,9 @@ workbuddy-agent-apk/
     ├── AGENT_SPEC.md             ← 助手/Agent 设计稿
     ├── DESIGN_SPEC.md            ← UI 设计稿
     ├── dsh/pack_dsh.ps1          ← DSH 打包脚本（含 ELF 补丁器）
+    ├── dsh/shim.c                ← home/bin 启动器（node/npm/pnpm/工具链/bash）
+    ├── dsh/assets/dsh-plugins/   ← 随 APK 落地的 DSH 插件源码（wb-mobile）
+    ├── dsh/tests/                ← 插件离线自检（node …selftest.mjs）
     └── app/src/
         ├── main/java/com/workbuddy2api/panel/
         │   ├── MainActivity.kt           ← 入口（edge-to-edge、通知权限、调试用 tab/mode extra）
@@ -256,6 +263,9 @@ adb shell am start -n com.workbuddy2api.panel/.MainActivity --ei tab 2 --es mode
 | 3.4.0 | P2：插件开关、安全模式、备份/还原、我的补丁 |
 | 3.5.0 | AI 通知、Shizuku 特权通道、扩展能力面板（工具链状态 + 社区插件清单） |
 | 3.6.0 | 内置 npm、社区插件一键安装、DSH 通知工具、扩展中心（npm CLI） |
+| 3.8.0 | 扩展中心：Termux 系统工具链（19 项）重定位安装（patchelf + 前缀替换） |
+| 3.9.3 | 修复 `spawn pnpm EACCES`（PATH 首位固定 `home/bin`） |
+| 3.10.0 | 内置 DSH 插件 `@workbuddy/dsh-mobile`：`wb_sh`/`wb_env`/`wb_shizuku`/`wb_notify` + Android 环境手册；`bash` 兜底到 mksh |
 
 ---
 
@@ -283,22 +293,22 @@ cd android
 
 ## 11. 安装包
 
-APK 体积约 107 / 117 MB（超出 GitHub 单文件 100 MB 限制），因此**不入库**，作为
+APK 体积约 117 / 128 MB（超出 GitHub 单文件 100 MB 限制），因此**不入库**，作为
 [GitHub Releases](../../releases) 附件发布；仓库里只保留校验值与发布说明。
 
 | 附件 | 大小 | 说明 |
 |---|---|---|
-| `WorkBuddy-3.9.3.apk` | 106.8 MB | 正式包，`adb install -r` 即可 |
-| `WorkBuddy-3.9.3-debug.apk` | 117.5 MB | 调试包（`run-as`、WebView 远程调试） |
+| `WorkBuddy-3.10.0.apk` | 116.7 MB | 正式包，`adb install -r` 即可 |
+| `WorkBuddy-3.10.0-debug.apk` | 127.8 MB | 调试包（`run-as`、WebView 远程调试） |
 | `SHA256SUMS` | — | 校验值 |
 
 ```bash
 # 下载（二选一）
-gh release download v3.9.3 -R Hy-ou/workbuddy-agent-apk -p "*.apk"
+gh release download v3.10.0 -R Hy-ou/workbuddy-agent-apk -p "*.apk"
 # 或浏览器打开 https://github.com/Hy-ou/workbuddy-agent-apk/releases/latest
 
 sha256sum -c SHA256SUMS
-adb install -r WorkBuddy-3.9.3.apk
+adb install -r WorkBuddy-3.10.0.apk
 ```
 
 发布新版本的流程见 [release/README.md](release/README.md)，上传脚本为

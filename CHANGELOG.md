@@ -5,6 +5,57 @@
 
 ---
 
+## 3.10.0 — 2026-10-21
+
+### 新增：内置 DSH 插件 `@workbuddy/dsh-mobile`（Android 执行通道 + 环境手册）
+
+**背景**：真机上 Agent 频繁调用 bash 等工具报错。根因有三条，都在宿主侧：
+
+1. `@deepseek-ai/dsh-bash-local` 执行的是 `spawn("bash", "-c", …)`，而 **Android 没有 bash**
+   （只有 `/system/bin/sh` = mksh + toybox）；`bash-sandbox`/`pwsh-sandbox` 在托管补丁里本来就禁用，
+   于是「唯一的 shell 工具」正好是跑不起来的那个。
+2. 即使有二进制也 exec 不了：`untrusted_app` 不能 exec `app_data_file`，内核树又落在 /sdcard（noexec）。
+3. 内核的 system prompt 里没有任何「这台手机有什么」的事实（文件权限、PATH、工具链、Shizuku、npm），
+   模型只能按 Linux 桌面习惯猜，猜错即报错，还会原样重试。
+
+**选择**：写成插件而不是 Agent 预设 —— 预设只能在已有插件里挑组合，既造不出 shell 通道，
+也无法把随环境变化的运行时事实写进提示词（对比见 docs/mobile-agent-plugin.md）。
+
+- **插件本体** `android/dsh/assets/dsh-plugins/wb-mobile/`（零依赖 ESM，只 import `node:`）：
+  - `wb_sh`：`/system/bin/sh -c`，返回 exitCode/stdout/stderr/timedOut，48 KB 输出上限 + 溢出 spill；
+  - `wb_env`：体检（可用/不可用命令、PATH、工具链与 npm CLI 清单、共享存储可写性、桥/Shizuku 状态）；
+  - `wb_shizuku`：经宿主回环桥以 uid 2000 执行（pm/input/screencap/settings/dumpsys）；
+  - `wb_notify`：系统通知；
+  - 系统提示词段 `workbuddy:android-environment`（order 1050）：文件权限与路径约定、POSIX-only 语法、
+    toybox 与 GNU 差异、npm/pnpm 位置、工具链安装位置、Shizuku 边界、「报错先读 stderr、禁止原样重试」。
+- **宿主安装** `dsh/MobilePlugin.kt`：每次启动内核前从 assets 复制到
+  `dshhome/profiles/web/node_modules/@workbuddy/dsh-mobile` 并登记到 `InstalledPlugins`，
+  由 `syncManagedPatch` 写进 `cordis.patch.yml` 的 insert 行（id `wb-mobile`）。
+  必须放 profile：DSH loader 用 profile 作 baseUrl 解析包名，放内核树会 ERR_MODULE_NOT_FOUND。
+- **bash 兜底**：`home/bin` 增加 `bash`/`sh` 链接 → `libwbnode_shim.so`，`shim.c` 把它们落到
+  `/system/bin/sh`（含 `#!/bin/bash`、`#!/bin/sh` shebang 解析），官方 bash 工具因此也能跑；
+  顺带删掉 shebang 分支里那条会以无参方式 exec 解释器的兜底调用。
+- **宿主桥扩展** `dsh/LocalBridge.kt`：新增 `POST /shell`（Shizuku，未授权返回 409 + 原因）；
+  `POST /health` 现在返回 `shizuku.available/granted`，供 `wb_env` 体检。
+- **修复宿主桥中文正文卡死**（真机复现）：请求体原先按「字符」读，而 `Content-Length` 是字节数，
+  UTF-8 中文正文永远读不满 → 连接挂到 5 s 超时、客户端只看到 fetch failed（纯 ASCII 正常）。
+  改为按字节读头部与正文（并给 body 加 1 MB 上限），通知/命令正文都可以是中文。
+- **构建**：`app/build.gradle.kts` 增加 `sourceSets.main.assets.srcDir("../dsh/assets")`，插件源码单点维护。
+- **自检** `android/dsh/tests/wb-mobile.selftest.mjs`：不需要设备，校验 4 个工具的 JSON Schema
+  （DSH 允许的子集）、渲染与失败路径；已用内核自带的 `assertSupportedJsonSchema` 交叉验证通过。
+- **真机坑 1：启动器必须重新编译**。`bash`/`sh` 回退写在 `shim.c` 里，若沿用旧
+  `libwbnode_shim.so`（例如从上一版 APK 里取 .so），`bash` 仍会报 `wbexec: target not found for bash`（exit 127）。
+  改动 `shim.c` 后必须跑 `pwsh android/dsh/build-shim.ps1`（NDK clang，两个 ABI）。
+  实测：新启动器在应用 uid 下 `bash -c 'echo hi'` → `argv0=/system/bin/sh`、exit 0。
+- **真机坑 2：PTC 模式里不能用 `execSync`**。内核的 node 是 Termux 构建，
+  二进制里硬编码了默认 shell `/data/data/com.termux/files/usr/bin/sh`（`grep -a -c termux` = 22），
+  该路径在 Android 上不存在，`run_code` 里任何 `child_process` 调用都是
+  `spawnSync ... ENOENT`。环境手册已按 PTC 重写：先声明「只能直接调 run_code，其它工具用
+  `await tools.xxx(...)`」，并给出 `tools.wb_env`/`tools.wb_sh` 的示例。
+- 版本 3.10.0 / versionCode 21。
+
+---
+
 ## 3.9.3 — 2026-10-21
 
 ### 修复
