@@ -151,6 +151,8 @@ class DshManager private constructor(private val app: Application) {
         // 内核命令 notify（走回环桥发通知）；清掉旧版本尝试过的插件登记
         val notifyScript = runCatching { NotifyCli.ensure(app, home) }.getOrNull()
         ensureBinShims(home)
+        // 内核 bin/ 里那套 Termux 的 pnpm/npm（在 /sdcard 上不可执行）会污染 PATH 解析，删掉
+        runCatching { for (n in listOf("pnpm", "pnpx", "npm", "npx")) File(kernel, "bin/" + n).delete() }
         // profile 的 pnpm 元数据和内置 pnpm 版本对齐，否则 DSH 自己的插件安装会报 UNEXPECTED_STORE
         runCatching { PluginInstaller.alignStoreDir(app, home) }
         InstalledPlugins.removeById(app, NotifyPlugin.ID)

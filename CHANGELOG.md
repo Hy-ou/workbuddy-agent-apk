@@ -5,6 +5,18 @@
 
 ---
 
+## 3.9.1 — 2026-10-21
+
+### 修复
+
+- DSH Web 端「添加插件」`spawn pnpm EACCES`：
+  - 启动器 pnpm 分支补上 `pnpm10/bin/pnpm.cjs`（3.9.0 的路径替换未生效）；
+  - 启动时删除内核 `bin/` 里 noexec 的 Termux `pnpm/npm/npx`，避免 PATH 回退命中。
+- 验证：应用进程内 `spawnSync("pnpm", ["view","dshmarket",…])` → status 0，
+  返回 `{"name":"dshmarket","version":"1.66.45"}`；pnpm 10.34.7。
+- 版本 3.9.1 / versionCode 18。
+
+---
 ## 3.9.0 — 2026-10-21
 
 ### 修复

@@ -68,7 +68,9 @@ int main(int argc, char **argv) {
     }
     if (!strcmp(base, "pnpm") || !strcmp(base, "pnpx")) {
         if (!node) return 127;
-        snprintf(script, sizeof(script), "%s/pnpmjs/node_modules/pnpm/bin/pnpm.cjs", home);
+        snprintf(script, sizeof(script), "%s/pnpm10/bin/pnpm.cjs", home);
+        if (!exists(script))
+            snprintf(script, sizeof(script), "%s/pnpmjs/node_modules/pnpm/bin/pnpm.cjs", home);
         if (!exists(script)) return 127;
         char **args = calloc((size_t)argc + 2, sizeof(char *));
         args[0] = (char *)node; args[1] = script;

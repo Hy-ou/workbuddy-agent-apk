@@ -313,3 +313,14 @@ ImageMagick / OpenSSH / ADB / Vim 等 Termux 包）：**不能直接解包就用
   - **真机验证（应用进程内）**：`git version 2.56.0`、`sqlite3 3.54.1`、
     `Python 3.14.8` + `python3 -c 'print(1+1)'` → `2`（`sys.prefix` 已指向工具链前缀）；
     社区插件 `dsh-cost-meter` / `dsh-free-search` 安装成功并出现在 patch insert 中。
+
+- **3.9.1（2026-10-21）**：修复 DSH Web 端「添加插件」报
+  `Command failed with EACCES: pnpm view … spawn pnpm EACCES`。
+  - **根因 1**：启动器 `libwbnode_shim.so` 里 pnpm 分支仍只找 `pnpmjs/…`
+    （3.9.0 改成内置 `pnpm10/` 后，路径替换没生效），于是 `spawn pnpm` 直接失败。
+    真机用 `child_process.spawnSync("pnpm", …)` 复现：`node`/`git` 正常，`pnpm` 失败。
+  - **根因 2**：内核 `bin/` 里还留着 payload 自带的 Termux `pnpm`/`npm`（在 `/sdcard` 上 **noexec**），
+    PATH 回退时命中它就会得到 EACCES。现在启动时直接删除这几个文件。
+  - **验证（应用进程内，等价内核）**：
+    `spawnSync("pnpm", ["view","dshmarket",…])` → `status=0`，
+    返回 `{"name":"dshmarket","version":"1.66.45"}`；`pnpm --version` → 10.34.7。

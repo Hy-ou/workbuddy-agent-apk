@@ -52,7 +52,7 @@ private val REFRESH_LABELS = listOf("3s", "5s", "10s", "30s")
 private val REFRESH_SECONDS = listOf(3, 5, 10, 30)
 
 /** 应用自身版本号（与 build.gradle.kts 的 versionName 保持一致）。 */
-private const val APP_VERSION = "3.9.0"
+private const val APP_VERSION = "3.9.1"
 
 /**
  * 设置页：连接信息 / 外观 / 刷新间隔 / 二级功能入口 / 关于。
