@@ -18,29 +18,29 @@ import java.io.File
  */
 object Toolchain {
 
-    data class Item(val id: String, val label: String, val pkg: String, val desc: String)
+    data class Item(val id: String, val label: String, val pkg: String, val desc: String, val verifyCmd: String = "")
 
     /** 参考项目的 19 项扩展（Termux 包名）。 */
     val CATALOG: List<Item> = listOf(
-        Item("python", "Python 3", "python", "脚本与数据处理"),
-        Item("golang", "Go", "golang", "编译 Go 程序"),
-        Item("rust", "Rust", "rust", "cargo 工具链"),
-        Item("clang", "Clang", "clang", "C/C++ 编译器"),
-        Item("openjdk", "OpenJDK 17", "openjdk-17", "Java 运行时与 javac"),
-        Item("git", "Git", "git", "版本控制"),
-        Item("ruby", "Ruby", "ruby", "Ruby 解释器"),
-        Item("php", "PHP", "php", "PHP 解释器"),
-        Item("perl", "Perl", "perl", "Perl 解释器"),
-        Item("lua", "Lua 5.4", "lua54", "轻量脚本语言"),
-        Item("sqlite", "SQLite", "sqlite", "数据库命令行"),
-        Item("ffmpeg", "FFmpeg", "ffmpeg", "音视频处理"),
-        Item("imagemagick", "ImageMagick", "imagemagick", "图像处理"),
-        Item("openssh", "OpenSSH", "openssh", "ssh / scp / sshd"),
-        Item("adb", "ADB", "android-tools", "adb / fastboot"),
-        Item("vim", "Vim", "vim", "终端编辑器"),
-        Item("nano", "nano", "nano", "轻量编辑器"),
-        Item("tmux", "tmux", "tmux", "终端复用"),
-        Item("make", "make", "make", "构建工具"),
+        Item("python", "Python 3", "python", "脚本与数据处理", "python3 -c \"print(1+1)\""),
+        Item("golang", "Go", "golang", "编译 Go 程序", "go version"),
+        Item("rust", "Rust", "rust", "cargo 工具链", "rustc --version"),
+        Item("clang", "Clang", "clang", "C/C++ 编译器", "clang --version"),
+        Item("openjdk", "OpenJDK 17", "openjdk-17", "Java 运行时与 javac", "java -version"),
+        Item("git", "Git", "git", "版本控制", "git --version"),
+        Item("ruby", "Ruby", "ruby", "Ruby 解释器", "ruby --version"),
+        Item("php", "PHP", "php", "PHP 解释器", "php --version"),
+        Item("perl", "Perl", "perl", "Perl 解释器", "perl -v"),
+        Item("lua", "Lua 5.4", "lua54", "轻量脚本语言", "lua -v"),
+        Item("sqlite", "SQLite", "sqlite", "数据库命令行", "sqlite3 --version"),
+        Item("ffmpeg", "FFmpeg", "ffmpeg", "音视频处理", "ffmpeg -version"),
+        Item("imagemagick", "ImageMagick", "imagemagick", "图像处理", "magick -version"),
+        Item("openssh", "OpenSSH", "openssh", "ssh / scp / sshd", "ssh -V"),
+        Item("adb", "ADB", "android-tools", "adb / fastboot", "adb version"),
+        Item("vim", "Vim", "vim", "终端编辑器", "vim --version"),
+        Item("nano", "nano", "nano", "轻量编辑器", "nano --version"),
+        Item("tmux", "tmux", "tmux", "终端复用", "tmux -V"),
+        Item("make", "make", "make", "构建工具", "make --version"),
     )
 
     fun rootDir(homeDir: File): File = File(homeDir, "toolchain")
@@ -117,7 +117,8 @@ object Toolchain {
             marker(homeDir, id).apply { parentFile?.mkdirs() }.writeText(
                 "${item.pkg} ${index.getValue(root).version}\n",
             )
-            Result(true, "${item.label} 安装完成（${pkgs.size} 个包）")
+            val check = verify(item, usr)
+            Result(true, "${item.label} 安装完成（${pkgs.size} 个包）" + if (check != null) "；自检：$check" else "")
         } catch (e: Exception) {
             Result(false, e.message ?: "安装失败（${e.javaClass.simpleName}）")
         }
@@ -128,6 +129,30 @@ object Toolchain {
         if (!m.isFile) return Result(false, "未安装：$id")
         m.delete()
         return Result(true, "已标记卸载（共享库保留，供其它扩展使用）")
+    }
+
+    /**
+     * 装完立即自检：用 linker64 直接加载目标二进制跑一次版本命令。
+     * 应用进程不能 exec files/ 下的文件，所以必须走 linker64（与 home/bin 启动器同款做法）。
+     */
+    private fun verify(item: Item, usr: File): String? {
+        if (item.verifyCmd.isBlank()) return null
+        return runCatching {
+            val parts = item.verifyCmd.split(" ")
+            val bin = File(usr, "bin/" + parts.first())
+            if (!bin.isFile) return null
+            val cmd = mutableListOf("/system/bin/linker64", bin.absolutePath)
+            cmd.addAll(parts.drop(1))
+            val pb = ProcessBuilder(cmd)
+            pb.redirectErrorStream(true)
+            pb.environment()["PATH"] = File(usr, "bin").absolutePath + ":/system/bin"
+            pb.environment()["HOME"] = usr.absolutePath
+            val p = pb.start()
+            val out = p.inputStream.bufferedReader().readText()
+            val code = p.waitFor()
+            val first = out.lineSequence().firstOrNull { it.isNotBlank() }?.trim() ?: ("exit=" + code)
+            if (code == 0) first.take(60) else ("失败(" + code + "): " + first.take(60))
+        }.getOrNull()
     }
 
     private fun isElf(f: File): Boolean = runCatching {

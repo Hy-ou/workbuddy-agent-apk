@@ -214,6 +214,21 @@ try {
             nodeInJniLibs = $true
         }
         $json = [Text.Encoding]::UTF8.GetBytes(($manifest | ConvertTo-Json -Depth 4))
+
+        # 内置纯 JS 的 pnpm（应用进程不能执行原生 @pnpm/exe，且不依赖首次启动联网安装）
+        $pnpmExtra = (Resolve-Path (Join-Path $PSScriptRoot "..\.payload-extra\pnpm10")).Path
+        if (Test-Path $pnpmExtra) {
+            $pnpmFiles = Get-ChildItem $pnpmExtra -Recurse -File
+            foreach ($f in $pnpmFiles) {
+                $rel = $f.FullName.Substring($pnpmExtra.Length).TrimStart("\", "/") -replace "\\", "/"
+                $entry = $out.CreateEntry("pnpm10/$rel", [IO.Compression.CompressionLevel]::Optimal)
+                $s = $f.OpenRead(); $d = $entry.Open(); $s.CopyTo($d); $d.Dispose(); $s.Dispose()
+            }
+            Write-Host ("    pnpm10 files={0}" -f $pnpmFiles.Count)
+        } else {
+            Write-Host "    [warn] 缺少 .payload-extra\pnpm10（社区插件安装会退化为离线不可用）"
+        }
+
         $me = $out.CreateEntry("PAYLOAD-MANIFEST.json", [IO.Compression.CompressionLevel]::Optimal)
         $ms = $me.Open(); $ms.Write($json, 0, $json.Length); $ms.Close()
         Write-Host "    payload-dsh.zip entries=$count"

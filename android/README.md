@@ -294,3 +294,22 @@ ImageMagick / OpenSSH / ADB / Vim 等 Termux 包）：**不能直接解包就用
     文件落在 `profiles/web/node_modules/dsh-cost-meter`，patch 自动加
     `- id: dsh-cost-meter`；重启内核日志出现
     `[dsh-cost-meter] 已加载,账本:…`，**无 warning、无未激活条目**。
+
+- **3.9.0（2026-10-21）**：工具链真正可执行 + 插件安装不再依赖首次联网（修复「换设备就装不上」）。
+  - **关键发现**：Android 10+ 的 SELinux **不允许应用进程执行应用私有目录里的文件**
+    （`exec` 返回 EACCES）。之前用 `adb run-as` 测「能跑」是 shell 域，不代表内核；
+    内核（untrusted_app）里 `git`/`sqlite3` 实际是 `Permission denied`。
+  - **修复**：`home/bin/<命令>` 全部改成指向 jniLibs 启动器 `libwbnode_shim.so` 的符号链接，
+    启动器用 `/system/bin/linker64 <目标>` 加载真正二进制（mmap 加载，绕开 exec 限制）；
+    脚本类（含 shebang）会解析解释器并映射到工具链前缀。
+    node/npm/pnpm 仍走 JS 分支。
+  - **内置 pnpm**：把 pnpm 10（纯 JS，4.7 MB）打进 payload（`pnpm10/`），
+    不再靠首次启动联网 `npm install pnpm` —— 这正是「换台设备就安装失败」的主因；
+    老版本升级时 `ensureExtraPayload()` 只增量补解压该目录，不动用户数据。
+  - **store 自动对齐**：内核每次启动把 `profiles/web/node_modules/.modules.yaml` 的
+    `storeDir` 对齐到内置 pnpm 期望的 `store/v10`，解决了 **DSH Web 端直接安装插件**
+    报 `ERR_PNPM_UNEXPECTED_STORE` 的问题（此前只在我手工对齐过的那台设备上正常）。
+  - **装完自检**：每个工具链都带 `verifyCmd`，安装结束用 linker64 跑一次并回显结果。
+  - **真机验证（应用进程内）**：`git version 2.56.0`、`sqlite3 3.54.1`、
+    `Python 3.14.8` + `python3 -c 'print(1+1)'` → `2`（`sys.prefix` 已指向工具链前缀）；
+    社区插件 `dsh-cost-meter` / `dsh-free-search` 安装成功并出现在 patch insert 中。

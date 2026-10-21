@@ -38,8 +38,10 @@ class MainActivity : ComponentActivity() {
         val startTab = intent?.getIntExtra("tab", 0) ?: 0
         val startMode = intent?.getStringExtra("mode") ?: ""
         setContent { WbRoot(startTab, startMode) }
+        runCatching { com.workbuddy2api.panel.dsh.DshManager.get(applicationContext).refreshBinShims() }
         debugToolchainInstall()
         debugPluginInstall()
+        debugExec()
     }
 
     /**
@@ -73,6 +75,37 @@ class MainActivity : ComponentActivity() {
                 android.util.Log.i("wbPlugin", "RESULT ok=" + r.ok + " msg=" + r.output)
             }.onFailure { android.util.Log.e("wbPlugin", "EXCEPTION", it) }
         }, "wb-plugin-debug").start()
+    }
+
+    /** 仅调试包：`--es wbExec "<命令>"`，用内核等价环境（应用进程）执行并打印输出。 */
+    private fun debugExec() {
+        if (!BuildConfig.DEBUG) return
+        val cmd = intent?.getStringExtra("wbExec")?.takeIf { it.isNotBlank() } ?: return
+        Thread({
+            runCatching {
+                val home = java.io.File(filesDir, "dsh-home").absolutePath
+                val nlib = applicationInfo.nativeLibraryDir
+                val tusr = home + "/toolchain/usr"
+                val pb = ProcessBuilder("sh", "-c", cmd)
+                pb.redirectErrorStream(true)
+                val e = pb.environment()
+                e["PATH"] = home + "/bin:" + tusr + "/bin:" + nlib + ":/system/bin"
+                e["HOME"] = filesDir.absolutePath
+                e["LD_LIBRARY_PATH"] = nlib
+                e["PREFIX"] = tusr
+                e["WB_DSH_HOME"] = home
+                e["WB_NODE"] = nlib + "/libdshnode.so"
+                e["WB_TOOLCHAIN_BIN"] = tusr + "/bin"
+                e["WB_TOOLS_BIN"] = home + "/tools/node_modules/.bin"
+                e["GIT_EXEC_PATH"] = tusr + "/libexec/git-core"
+                e["GIT_SSL_CAINFO"] = tusr + "/etc/tls/cert.pem"
+                val p = pb.start()
+                val out = p.inputStream.bufferedReader().readText()
+                val code = p.waitFor()
+                android.util.Log.i("wbExec", "exit=" + code)
+                out.lineSequence().take(12).forEach { android.util.Log.i("wbExec", it) }
+            }.onFailure { android.util.Log.e("wbExec", "EXCEPTION", it) }
+        }, "wb-exec-debug").start()
     }
 
     private fun requestNotificationPermission() {

@@ -5,6 +5,25 @@
 
 ---
 
+## 3.9.0 — 2026-10-21
+
+### 修复
+
+- **工具链无法执行**：应用进程不能 exec 私有目录二进制（SELinux）；改为
+  `home/bin/*` → jniLibs 启动器 → `/system/bin/linker64 <目标>` 加载；脚本解析 shebang 映射前缀。
+- **换设备插件装不上**：pnpm 内置进 payload（pnpm10，纯 JS），不再依赖首启联网安装；
+  升级时 `ensureExtraPayload()` 增量补解压，不覆盖用户数据。
+- **DSH Web 端安装插件报 UNEXPECTED_STORE**：内核每次启动自动对齐
+  `profiles/web/node_modules/.modules.yaml` 的 storeDir。
+- 工具链新增 `verifyCmd`，装完立即自检并回显。
+
+### 验证
+
+- 应用进程内：git 2.56.0 / sqlite3 3.54.1 / Python 3.14.8（print(1+1)→2，sys.prefix 正确）。
+- 社区插件 dsh-cost-meter、dsh-free-search 安装成功并写入 patch。
+- 16 KB 对齐 16/16 通过；release 116.7 MB；versionCode 17。
+
+---
 ## 3.8.2 — 2026-10-21
 
 ### 修复

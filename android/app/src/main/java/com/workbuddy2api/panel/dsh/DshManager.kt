@@ -151,6 +151,8 @@ class DshManager private constructor(private val app: Application) {
         // 内核命令 notify（走回环桥发通知）；清掉旧版本尝试过的插件登记
         val notifyScript = runCatching { NotifyCli.ensure(app, home) }.getOrNull()
         ensureBinShims(home)
+        // profile 的 pnpm 元数据和内置 pnpm 版本对齐，否则 DSH 自己的插件安装会报 UNEXPECTED_STORE
+        runCatching { PluginInstaller.alignStoreDir(app, home) }
         InstalledPlugins.removeById(app, NotifyPlugin.ID)
         syncManagedPatch(home)
         val replayed = runCatching { UserPatches.replay(kernel, home) }.getOrDefault(0)
@@ -186,6 +188,8 @@ class DshManager private constructor(private val app: Application) {
         env["GIT_EXEC_PATH"] = File(home, "toolchain/usr/libexec/git-core").absolutePath
         env["GIT_TEMPLATE_DIR"] = File(home, "toolchain/usr/share/git-core/templates").absolutePath
         env["WB_NODE"] = node.absolutePath
+        env["WB_TOOLCHAIN_BIN"] = File(home, "toolchain/usr/bin").absolutePath
+        env["WB_TOOLS_BIN"] = File(home, "tools/node_modules/.bin").absolutePath
         env["WB_DSH_HOME"] = home.absolutePath
         env["PATH"] = listOf(
             File(home, "tools/node_modules/.bin").absolutePath,
@@ -393,12 +397,20 @@ class DshManager private constructor(private val app: Application) {
     /** 清空我的补丁，并让内核树下次启动重新解压（回出厂）。 */
     fun clearMyPatches() = runCatching { UserPatches.clear(homeDir(), kernelDir()) }
 
+    /** 应用更新后 nativeLibraryDir 会变，启动时刷新一次 home/bin 的符号链接。 */
+    fun refreshBinShims() {
+        runCatching { ensureBinShims(homeDir()) }
+    }
+
     fun toolchainInstalled(id: String): Boolean = Toolchain.installed(homeDir(), id)
 
     fun toolchainInstalledIds(): List<String> = Toolchain.installedIds(homeDir())
 
-    suspend fun installToolchain(id: String, onLog: (String) -> Unit = {}): Toolchain.Result =
-        Toolchain.install(app, homeDir(), id, app.cacheDir, onLog)
+    suspend fun installToolchain(id: String, onLog: (String) -> Unit = {}): Toolchain.Result {
+        val r = Toolchain.install(app, homeDir(), id, app.cacheDir, onLog)
+        if (r.ok) runCatching { ensureBinShims(homeDir()) }
+        return r
+    }
 
     fun uninstallToolchain(id: String): Toolchain.Result = Toolchain.uninstall(homeDir(), id)
 
@@ -446,6 +458,8 @@ class DshManager private constructor(private val app: Application) {
      */
     /** 首次启动时用内置 npm 装一个与应用前缀无关的 pnpm（payload 自带的 pnpm 硬编码 Termux 前缀）。 */
     private fun ensurePnpmRuntime(home: File, node: File) {
+        // 已内置纯 JS 的 pnpm（payload: pnpm10/），不需要联网安装
+        if (File(home, "pnpm10/bin/pnpm.cjs").isFile) return
         val entry = File(home, "pnpmjs/node_modules/pnpm/bin/pnpm.cjs")
         // pnpm>=9 会拉原生 @pnpm/exe（应用数据目录不可 exec），只认纯 JS 的 pnpm 10
         if (entry.isFile) return
@@ -482,6 +496,19 @@ class DshManager private constructor(private val app: Application) {
             val bin = File(home, "bin").apply { mkdirs() }
             val shim = File(app.applicationInfo.nativeLibraryDir, "libwbnode_shim.so")
             if (!shim.isFile) return
+            // 工具链里的每个命令也建链接：应用进程无法直接 exec files/ 下的二进制，
+            // 由启动器用 linker64 加载（见 android/dsh/shim.c）。
+            for (dir in listOf(File(home, "toolchain/usr/bin"), File(home, "tools/node_modules/.bin"))) {
+                val names = dir.list() ?: continue
+                for (n in names) {
+                    if (n == "node" || n == "npm" || n == "pnpm") continue
+                    val target = File(dir, n)
+                    if (!target.isFile) continue
+                    val link = File(bin, n)
+                    runCatching { link.delete() }
+                    runCatching { android.system.Os.symlink(shim.absolutePath, link.absolutePath) }
+                }
+            }
             for (name in listOf("pnpm", "npm", "node")) {
                 val link = File(bin, name)
                 // 每次启动重建：应用更新后 nativeLibraryDir 路径会变，旧链接会失效
@@ -534,6 +561,28 @@ class DshManager private constructor(private val app: Application) {
         return n
     }
 
+    /**
+     * 增量补齐 payload 里的可选组件（如内置 pnpm10）。
+     * 老版本升级后 .extracted 标记还在，全量重解压会覆盖用户 dshhome 数据，所以这里只补缺失的目录。
+     */
+    private fun ensureExtraPayload(home: File) {
+        if (File(home, "pnpm10/bin/pnpm.cjs").isFile) return
+        runCatching {
+            java.util.zip.ZipInputStream(app.assets.open("payload-dsh.zip")).use { zin ->
+                while (true) {
+                    val e = zin.nextEntry ?: break
+                    if (!e.name.startsWith("pnpm10/")) { zin.closeEntry(); continue }
+                    val f = File(home, e.name)
+                    if (e.isDirectory) f.mkdirs() else {
+                        f.parentFile?.mkdirs()
+                        java.io.FileOutputStream(f).use { zin.copyTo(it) }
+                    }
+                    zin.closeEntry()
+                }
+            }
+        }
+    }
+
     /** 确保内核树/用户态目录就位：拆分迁移旧合并树、清掉残留、缺文件则解压。 */
     private fun ensureLayout(kernel: File, home: File) {
         val kernelMark = File(kernel, EXTRACTED_MARK)
@@ -575,6 +624,7 @@ class DshManager private constructor(private val app: Application) {
             kernelMark.writeText("entries=$n")
             homeMark.writeText("entries=$n")
         }
+        ensureExtraPayload(home)
 
         // 首次解压后记录出厂基线（供「我的补丁」比对）
         runCatching { UserPatches.ensureBaseline(kernel, home) }

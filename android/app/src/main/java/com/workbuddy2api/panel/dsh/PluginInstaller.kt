@@ -28,6 +28,8 @@ object PluginInstaller {
     private fun node(context: Context) = File(context.applicationInfo.nativeLibraryDir, "libdshnode.so")
     /** 优先纯 JS 入口：pnpm>=9 自带的 @pnpm/exe 原生二进制无法在应用数据目录执行。 */
     private fun pnpmEntry(homeDir: File): File {
+        val bundled = File(homeDir, "pnpm10/bin/pnpm.cjs")
+        if (bundled.isFile) return bundled
         return File(homeDir, "pnpmjs/node_modules/pnpm/bin/pnpm.cjs")
     }
     private fun npmCli(homeDir: File) = File(homeDir, "npm/bin/npm-cli.js")
@@ -102,7 +104,7 @@ object PluginInstaller {
      * 不一致直接报 ERR_PNPM_UNEXPECTED_STORE 并拒绝安装。profile 最初由别的 pnpm 版本装过，
      * 这里把记录改成当前 pnpm 期望的位置（并建好目录），让 add/remove 能跑。
      */
-    private fun alignStoreDir(context: Context, homeDir: File) {
+    internal fun alignStoreDir(context: Context, homeDir: File) {
         val modules = File(profileDir(homeDir), "node_modules/.modules.yaml")
         if (!modules.isFile) return
         val store = File(context.filesDir, ".local/share/pnpm/store/v10")
