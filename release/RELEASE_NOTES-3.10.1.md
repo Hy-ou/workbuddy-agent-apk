@@ -29,6 +29,18 @@ DSH 网页**没有独立的「添加附件」按钮**。附件入口只有两条
 （多选时系统只填 `clipData`，等于「选多个 = 什么都没选」）；上一次没归还的 `ValueCallback`
 会让后续选择器永远不弹。
 
+### 真机验证
+
+Xiaomi M332BF（Android 15，WebView Chromium 149）实测通过：
+
+1. 「+」→「文件」弹出系统文件选择器；
+2. 选中 `wb-attach-test.txt` 后，输入框上方出现附件卡片（名称 + `TXT 20B` + 移除按钮）；
+3. logcat 全链路打通：`[wb] file input click` → `onShowFileChooser mode=...` →
+   `launch ... -> true` → `picker result code=-1 uris=1`；
+4. 另用 debug 包的 WebView 远程调试（CDP `DOM.setFileInputFiles`）绕过原生选择器直接给
+   input 塞文件，卡片同样出现 —— 证明前端入队/上传没问题，此前「选完没反应」确实只卡在原生
+   把 URI 交回 WebView 这一段。
+
 ### 修复（`ui/dsh/DshScreen.kt`）
 
 - **选择 Intent 兜底链**：`params.createIntent()` → `ACTION_OPEN_DOCUMENT` →

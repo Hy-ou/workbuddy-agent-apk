@@ -150,7 +150,12 @@ ROM 裁掉了对应的 DocumentsUI、launcher 在 Activity 未 RESUMED 时抛异
 - 新请求先释放旧 callback，`DisposableEffect` 在页面销毁时归还；
 - `FILE_PROBE_JS`：`hidden`（`display:none`）的 file input 改成 1px 不可见块，并输出点击日志。
 
-**验证**：`adb logcat -s WbDshFile WbDshWeb`，点一次「+」→「文件」：
+**已实测（3.10.1）**：Xiaomi M332BF 上「+」→「文件」弹出选择器，选中后卡片正常出现；
+logcat 为 `[wb] file input click` → `onShowFileChooser mode=...` → `launch ... -> true` →
+`picker result code=-1 uris=1`。另外用 debug 包 CDP 的 `DOM.setFileInputFiles` 绕过原生选择器
+直接给 input 塞文件，卡片同样出现——据此把「选完没反应」定位到原生回传 URI 这一段，而不是前端入队。
+
+**验证手法**：`adb logcat -s WbDshFile WbDshWeb`，点一次「+」→「文件」：
 
 | logcat | 结论 |
 |---|---|

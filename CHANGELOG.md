@@ -37,10 +37,18 @@ Activity。前两步在前端，后两步在宿主。
 - **全链日志**：`WbDshFile`（宿主回调入参、每条 Intent 的启动结果、选择结果条数）、
   `WbDshWeb`（页面 console，含上面的探针）。
 
-**验证**（真机，尚未验证）：`adb logcat -s WbDshFile WbDshWeb`，再点一次「+」→「文件」。三种组合
-分别对应三种根因：有 `[wb] file input click` 无 `onShowFileChooser` → WebView 没回调；有
-`onShowFileChooser` + 全部 `launch ... -> false` → 设备没有可用选择器 Activity；有
-`picker result ... uris=N` → 宿主侧已通，问题回到前端。
+**验证**：真机 Xiaomi M332BF（Android 15 / WebView Chromium 149）实测通过——
+「+」→「文件」弹出系统选择器，选中文件后输入框上方出现附件卡片（名称 / TXT / 20B），可正常发送；
+logcat 链路 `[wb] file input click` → `onShowFileChooser mode=...` → `launch ... -> true` →
+`picker result code=-1 uris=1` 全部打通。
+
+另外用 WebView 远程调试（debug 包 CDP `DOM.setFileInputFiles`）单独验证了前端入队：
+不走原生选择器直接给 input 塞文件时，卡片同样出现，说明「选完没反应」只可能出在原生把 URI 交回
+WebView 这一段，前端入队与后台上传本身没有问题。
+
+排查时按 logcat 组合定位（三种根因）：有 `[wb] file input click` 无 `onShowFileChooser` →
+WebView 没回调；有 `onShowFileChooser` + 全部 `launch ... -> false` → 设备没有可用选择器
+Activity；有 `picker result ... uris=N` → 宿主侧已通。
 
 - 版本 3.10.1 / versionCode 22。
 
