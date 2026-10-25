@@ -129,6 +129,17 @@ cd android && gradle test
 
 ## 变更记录
 
+- **3.10.1（2026-10-25）**：修复对话页「添加文件」点了不弹系统选择器。
+  链路澄清：DSH 网页里没有独立的附件按钮，入口是输入框左下角「+」→「文件」，以及拖拽；
+  点下去后前端调 `input[type=file].click()`，必须由宿主 `onShowFileChooser` 拉起选择器 Activity。
+  根因：宿主只有 `params.createIntent()` 一条路径，失败时 `catch { return false }`，
+  WebView 收到 `false` 静默不弹窗且不留日志（定制 ROM 缺对应 DocumentsUI、Intent 不可启动等都会落到这条死路）。
+  修复：选择 Intent 兜底链 `createIntent()` → `ACTION_OPEN_DOCUMENT` → `ACTION_GET_CONTENT`（带多选/MIME/读权限）；
+  结果改从 `clipData` 收集（多选时 `data.data` 为 null）；释放未归还的 `ValueCallback`；
+  `FILE_PROBE_JS` 把 `hidden` 的 file input 改成 1px 不可见块并在点击时打日志；
+  新增 `WbDshFile` 日志标签。排查方法见
+  [../docs/troubleshooting.md](../docs/troubleshooting.md) 第 10 节。版本 3.10.1 / versionCode 22。
+
 - **3.10.0（2026-10-21）**：内置 DSH 插件 `@workbuddy/dsh-mobile`（Android 执行通道 + 环境手册）。
   背景：真机上 Agent 调 bash 必失败 —— `dsh-bash-local` 执行 `spawn("bash", …)`，而 Android 只有
   `/system/bin/sh`（mksh）；且内核提示词里没有任何「这台手机有什么」的事实，模型只能猜。

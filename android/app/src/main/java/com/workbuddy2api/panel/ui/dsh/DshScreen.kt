@@ -313,7 +313,10 @@ private fun DshWebView(
         return
     }
 
-    // 附件按钮：前端用 <input type=file>，WebView 必须实现 onShowFileChooser 才会弹选择器。
+    // 附件按钮：前端用 <input type=file>，WebView 只在 onShowFileChooser 里真正拉起一个
+    // 选择器 Activity 时才弹窗；params 为空、Intent 不可启动、上一次回调没释放……任何一步
+    // 失败 WebView 都只是静默放弃，前端表现就是「点了没反应」。所以这里逐级兜底并全程
+    // 打 logcat（tag WbDshFile / WbDshWeb），把断点定位到具体一层。
     var fileCallback by remember { mutableStateOf<android.webkit.ValueCallback<Array<android.net.Uri>>?>(null) }
     val filePicker = androidx.activity.compose.rememberLauncherForActivityResult(
         androidx.activity.result.contract.ActivityResultContracts.StartActivityForResult(),
@@ -323,11 +326,20 @@ private fun DshWebView(
         if (cb == null) {
             return@rememberLauncherForActivityResult
         }
-        val uri = result.data?.data
-        if (result.resultCode == android.app.Activity.RESULT_OK && uri != null) {
-            cb.onReceiveValue(arrayOf(uri))
+        val uris = if (result.resultCode == android.app.Activity.RESULT_OK) {
+            collectPickedUris(result.data)
         } else {
-            cb.onReceiveValue(null)
+            emptyList()
+        }
+        Log.i(TAG_FILE, "picker result code=${result.resultCode} uris=${uris.size}")
+        runCatching { cb.onReceiveValue(if (uris.isEmpty()) null else uris.toTypedArray()) }
+    }
+    // 页面销毁时不能把 WebView 的 callback 悬着，否则下一次点击永远不会弹选择器。
+    androidx.compose.runtime.DisposableEffect(Unit) {
+        onDispose {
+            val cb = fileCallback
+            fileCallback = null
+            if (cb != null) runCatching { cb.onReceiveValue(null) }
         }
     }
 
@@ -364,6 +376,7 @@ private fun DshWebView(
                         Log.i(TAG_WEB, "pageFinished url=$url title=${view?.title}")
                         manager.markTokenConsumed()
                         injectViewportFix(view)
+                        runCatching { view?.evaluateJavascript(FILE_PROBE_JS, null) }
                         runCatching { view?.evaluateJavascript(BG_JS, null) }
                     }
 
@@ -399,23 +412,35 @@ private fun DshWebView(
                         callback: android.webkit.ValueCallback<Array<android.net.Uri>>?,
                         params: WebChromeClient.FileChooserParams?,
                     ): Boolean {
-                        fileCallback?.onReceiveValue(null)
-                        fileCallback = callback
-                        return try {
-                            val intent = params?.createIntent()
-                            if (intent == null) {
-                                fileCallback = null
-                                callback?.onReceiveValue(null)
-                                false
-                            } else {
-                                filePicker.launch(intent)
-                                true
-                            }
-                        } catch (t: Throwable) {
-                            fileCallback = null
-                            callback?.onReceiveValue(null)
-                            false
+                        Log.i(
+                            TAG_FILE,
+                            "onShowFileChooser mode=${params?.mode} accept=${params?.acceptTypes?.joinToString(",") ?: "-"}",
+                        )
+                        // 释放上一次没走完的请求，否则 WebView 会一直等它。
+                        fileCallback?.let { runCatching { it.onReceiveValue(null) } }
+                        fileCallback = null
+                        if (callback == null) {
+                            Log.w(TAG_FILE, "onShowFileChooser: null callback")
+                            return false
                         }
+                        fileCallback = callback
+                        var launched = false
+                        for (intent in fileChooserIntents(params)) {
+                            val ok = runCatching { filePicker.launch(intent) }
+                                .onFailure { Log.w(TAG_FILE, "launch failed: ${intent.action}", it) }
+                                .isSuccess
+                            Log.i(TAG_FILE, "launch ${intent.action} -> $ok")
+                            if (ok) {
+                                launched = true
+                                break
+                            }
+                        }
+                        if (!launched) {
+                            // 一个都启动不了：立刻把 callback 还回去，避免整条链路卡死。
+                            fileCallback = null
+                            runCatching { callback.onReceiveValue(null) }
+                        }
+                        return launched
                     }
                 }
                 if (com.workbuddy2api.panel.BuildConfig.DEBUG) {
@@ -472,6 +497,100 @@ private fun DshWebView(
 }
 
 private const val TAG_WEB = "WbDshWeb"
+
+/** 附件选择器链路的 logcat tag（与页面 bridge 日志分开，便于一眼定位断点）。 */
+private const val TAG_FILE = "WbDshFile"
+
+/**
+ * 从系统文件选择器返回的 Intent 里取出全部 URI。
+ *
+ * 多选时系统只把结果放进 Intent.getClipData，data.data 为 null；旧实现只读 data.data，
+ * 于是「一次选多个文件」会退化成「什么都没选」。单选时两者可能同时存在，这里按顺序去重。
+ */
+private fun collectPickedUris(data: android.content.Intent?): List<android.net.Uri> {
+    if (data == null) return emptyList()
+    val out = ArrayList<android.net.Uri>()
+    val clip = data.clipData
+    if (clip != null) {
+        for (i in 0 until clip.itemCount) {
+            val uri = clip.getItemAt(i)?.uri ?: continue
+            if (!out.contains(uri)) out.add(uri)
+        }
+    }
+    val single = data.data
+    if (single != null && !out.contains(single)) out.add(single)
+    return out
+}
+
+/**
+ * 逐级兜底的文件选择 Intent。DSH 前端的 input 没写 accept、又开了 multiple，
+ * 只有允许具体 MIME 与多选的实现才和 WebView 期望一致。
+ *
+ * 1. WebView 依据 input 属性生成的 intent（最贴合前端语义）；
+ * 2. Intent.ACTION_OPEN_DOCUMENT（SAF，现代 ROM 一定有）；
+ * 3. Intent.ACTION_GET_CONTENT（老机型/定制 ROM 常见的实现）。
+ *
+ * 部分定制 ROM 删掉了其中一种 DocumentsUI，只有前一个不可启动时才会落到后一个。
+ */
+private fun fileChooserIntents(params: WebChromeClient.FileChooserParams?): List<android.content.Intent> {
+    val multiple = params?.mode == WebChromeClient.FileChooserParams.MODE_OPEN_MULTIPLE
+    val accepts = params?.acceptTypes?.filter { it.isNotBlank() } ?: emptyList()
+    val primary = accepts.firstOrNull { it.contains('/') && it != "*/*" } ?: "*/*"
+    val out = ArrayList<android.content.Intent>()
+    runCatching { params?.createIntent() }.getOrNull()?.let { given ->
+        given.addFlags(android.content.Intent.FLAG_GRANT_READ_URI_PERMISSION)
+        out.add(given)
+    }
+    for (action in listOf(
+        android.content.Intent.ACTION_OPEN_DOCUMENT,
+        android.content.Intent.ACTION_GET_CONTENT,
+    )) {
+        out.add(android.content.Intent(action).apply {
+            addCategory(android.content.Intent.CATEGORY_OPENABLE)
+            addFlags(android.content.Intent.FLAG_GRANT_READ_URI_PERMISSION)
+            type = primary
+            if (multiple) putExtra(android.content.Intent.EXTRA_ALLOW_MULTIPLE, true)
+            if (accepts.isNotEmpty()) putExtra(android.content.Intent.EXTRA_MIME_TYPES, accepts.toTypedArray())
+        })
+    }
+    return out
+}
+
+/**
+ * 附件按钮探针 + file input 可见性兜底。
+ *
+ * 诊断目的：把「前端根本没点 input[type=file]」和「前端点了、但 WebView 没把
+ * onShowFileChooser 交给我们」两种情况分开——前者 logcat 里没有 file input click，
+ * 后者有。所有输出都走 console.log，由 onConsoleMessage 落到 tag WbDshWeb。
+ *
+ * 兼容目的：React 用 hidden 属性渲染这个 input（display:none）。个别 ROM 的 Blink
+ * 实现会忽略对 display:none 输入框的程序化 click()，这里改成 1px 不可见块，语义不变。
+ */
+private const val FILE_PROBE_JS = """
+(function(){
+  if (window.__wbFileProbe) return;
+  window.__wbFileProbe = 1;
+  try {
+    var st = document.createElement('style');
+    st.id = 'wb-file-input';
+    st.textContent = 'input[type=file][hidden]{display:block!important;position:fixed!important;'
+      + 'left:-10000px!important;top:0!important;width:1px!important;height:1px!important;'
+      + 'opacity:0!important;pointer-events:none!important}';
+    (document.head || document.documentElement).appendChild(st);
+  } catch (e) {}
+  try {
+    document.addEventListener('click', function(e){
+      var t = e.target;
+      if (!t || t.tagName !== 'INPUT' || t.type !== 'file') return;
+      var d = '';
+      try { d = getComputedStyle(t).display; } catch (x) {}
+      console.log('[wb] file input click trusted=' + e.isTrusted
+        + ' display=' + d + ' disabled=' + t.disabled
+        + ' multiple=' + t.multiple + ' accept=' + (t.accept || '-'));
+    }, true);
+  } catch (e) {}
+})();
+"""
 
 /**
  * 该机型 WebView（Chromium 149）里 `vh/dvh` 恒为 0（连 about:blank 都如此），

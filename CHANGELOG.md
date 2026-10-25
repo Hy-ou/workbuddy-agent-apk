@@ -5,6 +5,47 @@
 
 ---
 
+## 3.10.1 — 2026-10-25
+
+### 修复：对话页「添加文件」点击后不弹系统选择器
+
+**现象**：App 内 DSH 控制台对话页，点输入框左下角「+」→ 菜单里的「文件」后，系统文件选择器
+完全不出现——页面没有报错、没有 toast，也没有任何请求。
+
+**链路**（先厘清，否则容易改错地方）：DSH 网页里**没有独立的附件按钮**，只有两条入口——
+「+」菜单的 `file` 动作，以及把文件拖进页面。点菜单项时前端走
+`ctx.filePicker.open()` → `input[type=file].click()`（`@deepseek-ai/dsh-client-ui-conversation`
+0.2.1-rc.2 的 `bindFilePicker`），之后是宿主的 `WebChromeClient.onShowFileChooser` → 系统选择器
+Activity。前两步在前端，后两步在宿主。
+
+**根因**：宿主的 `onShowFileChooser` 只有一条路径 `params.createIntent()`，任何一步不成立
+（`params` 为空、Intent 不可启动、定制 ROM 裁掉了对应 DocumentsUI、`launch()` 抛异常）都走
+`catch { return false }`。WebView 收到 `false` 就**静默不弹窗**，连日志都没有，于是前端看到的
+就是「点了没反应」。附带两个同链路的隐藏缺陷：结果只读 `data.data`（多选时系统只填
+`clipData`，等于「选多个 = 什么都没选」）；上一个 callback 没释放时会让后续选择器永久不弹。
+
+**修复**（`ui/dsh/DshScreen.kt`）：
+
+- **兜底链**：`params.createIntent()` → `ACTION_OPEN_DOCUMENT` → `ACTION_GET_CONTENT`，带
+  `EXTRA_ALLOW_MULTIPLE` / `EXTRA_MIME_TYPES` / `FLAG_GRANT_READ_URI_PERMISSION`，逐条 try，
+  直到某一条真正 launch 成功；全部失败才把 `null` 还给 WebView。
+- **结果收集**：新增 `collectPickedUris()`，先读 `clipData` 全部项再读 `data.data` 去重，多选可用。
+- **不再挂起 callback**：新请求先释放上一个，并用 `DisposableEffect` 在页面销毁时归还。
+- **`FILE_PROBE_JS`**：把 React 用 `hidden` 属性渲染的 file input 从 `display:none` 改成 1px
+  不可见块（个别 ROM 的 Blink 会忽略对 `display:none` 输入框的程序化 `click()`），并在每次点击
+  时输出 `[wb] file input click ...`。
+- **全链日志**：`WbDshFile`（宿主回调入参、每条 Intent 的启动结果、选择结果条数）、
+  `WbDshWeb`（页面 console，含上面的探针）。
+
+**验证**（真机，尚未验证）：`adb logcat -s WbDshFile WbDshWeb`，再点一次「+」→「文件」。三种组合
+分别对应三种根因：有 `[wb] file input click` 无 `onShowFileChooser` → WebView 没回调；有
+`onShowFileChooser` + 全部 `launch ... -> false` → 设备没有可用选择器 Activity；有
+`picker result ... uris=N` → 宿主侧已通，问题回到前端。
+
+- 版本 3.10.1 / versionCode 22。
+
+---
+
 ## 3.10.0 — 2026-10-21
 
 ### 新增：内置 DSH 插件 `@workbuddy/dsh-mobile`（Android 执行通道 + 环境手册）

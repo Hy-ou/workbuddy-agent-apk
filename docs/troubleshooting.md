@@ -125,7 +125,46 @@ base URL（走 cookie）。同时 `DshManager` 只解析「本次启动之后」
 
 ---
 
-## 10. 调试技巧备忘
+## 10. 对话页「添加文件」点击后不弹系统选择器
+
+**现象**：App 内 DSH 控制台对话页，点「+」→「文件」没有任何反应；不弹选择器、无 toast、无请求。
+
+**定位**：先确认入口和链路，别急着改前端。
+1. DSH 网页**没有独立的附件按钮**：附件入口是输入框左下角「+」→ 菜单里的「文件」（回形针），
+   以及把文件拖进页面。
+2. 菜单项走前端 `inputHub.pickFiles()` → `fileInputRef.current?.click()`
+   （`@deepseek-ai/dsh-client-ui-conversation` 的 `bindFilePicker`/`pickFiles`）。
+3. 之后必须由宿主的 `WebChromeClient.onShowFileChooser` 拉起一个选择器 Activity。
+
+**根因**：`onShowFileChooser` 只有 `params.createIntent()` 一条路径，且失败时 `catch { return false }`。
+WebView 收到 `false` 是**静默放弃**——不弹窗、不打日志，所以前端看起来就是「按钮坏了」。
+会落到这条死路的实际情况至少有四种：`params` 为空、Intent 在定制 ROM 上不可启动、
+ROM 裁掉了对应的 DocumentsUI、launcher 在 Activity 未 RESUMED 时抛异常。
+同链路另外两个坑：多选结果只在 `clipData` 里（旧代码只读 `data.data`，等于「选多个 = 没选」）；
+上一次的 `ValueCallback` 没归还时，后续选择器永远不弹。
+
+**修复**（`ui/dsh/DshScreen.kt`）：
+- 选择 Intent 兜底链 `createIntent()` → `ACTION_OPEN_DOCUMENT` → `ACTION_GET_CONTENT`，
+  带 `EXTRA_ALLOW_MULTIPLE` / `EXTRA_MIME_TYPES` / `FLAG_GRANT_READ_URI_PERMISSION`，逐条试；
+- `collectPickedUris()` 先读 `clipData` 再读 `data.data` 去重；
+- 新请求先释放旧 callback，`DisposableEffect` 在页面销毁时归还；
+- `FILE_PROBE_JS`：`hidden`（`display:none`）的 file input 改成 1px 不可见块，并输出点击日志。
+
+**验证**：`adb logcat -s WbDshFile WbDshWeb`，点一次「+」→「文件」：
+
+| logcat | 结论 |
+|---|---|
+| 无 `[wb] file input click` | 前端没点到 input（DSH UI 层，非宿主问题） |
+| 有 `[wb] file input click`，无 `onShowFileChooser` | WebView 没回调，继续换注入/可见性方案 |
+| 有 `onShowFileChooser` + `launch ... -> false` | 设备没有可启动的选择器 Activity（兜底链应已救回） |
+| 有 `picker result ... uris=N` | 宿主侧已通，问题回到前端或上传准入 |
+
+> debug 包还能用 WebView 远程调试直接看：`adb forward tcp:9222 localabstract:webview_devtools_remote_$(adb shell pidof com.workbuddy2api.panel)`，
+> 在 Console 里看 `[wb] file input click ...`，Network 里看 `/api` 的上传请求。
+
+---
+
+## 11. 调试技巧备忘
 
 ```bash
 # 直达某个 Tab（debug intent extra）
