@@ -5,6 +5,65 @@
 
 ---
 
+## 3.10.2 — 2026-10-27
+
+### 修复：每天首次请求被上游内容防火墙拦下（400 / code 11-128），随后一整天降级
+
+**现象**：网关日志出现
+
+```text
+WARN: [upstream] chat_stream acct=…: upstream 400 content_blocked
+body={"code":11-128,"msg":"Illegal API invocation from an unapproved channel",…}
+content-blocked (likely fingerprint false positive) -> degraded prompt retry
+```
+
+客户端无感（同请求内换降级提示词重试后 200），但代价是：① 每次白撞一次上游往返；
+② 降级状态**持续到次日 00:00**，期间**所有** `passthrough` 请求的 system 提示词都被替换成
+3 句中性文本——内置 DSH 的工具约定/项目规范整套丢失；③ 手机端网关通常不重启，等于一次误报
+锁死一整天，且没有任何日志或界面提示。
+
+**根因**：上游内容审核是**逐字精确匹配**（非语义），而内置 DSH 的**一手 system prompt** 里有两处
+字符串命中它的黑名单。用新加的二分探针（见下）在同账号上 100% 复现并收敛到：
+
+| # | 触发子串 | 长度 | 来源（DSH 侧） | 边界 |
+|---|---|---|---|---|
+| 1 | `You are an AI agent running on DeepSeek Harness` | 47 B | `dsh-system-prompt`（`harness:identity`, order −1000） | 上游**大小写不敏感**；"You are an AI agent powered by" 与 "DeepSeek Harness" 必须同时在场 |
+| 2 | `You are interacting with the user via the DeepSeek Harness Web GUI … without naming another target, that means this GUI.` | 221 B | `dsh-harness-dev-context`（`app:web-surface`, order 10100） | 整串逐字匹配，**结尾 `GUI.` 必需**（220 B 缺句号→200，补上句号→400；两句各自单独 200） |
+
+决定性验证：真实渲染的 system prompt（7656 B）→ 400；**只去掉 #1 仍 400**；两处都去掉（6598 B）→ 200。
+两条都在 DSH 自己的提示词里，与用户内容、工具声明无关。
+
+**修复**：
+
+- **网关词表**（`internal/upstream/sanitize.go`）：新增 `sanitizeHarnessRewrites`，对本族指纹走 `(?i)`
+  正则而非字面替换（上游不区分大小写，字面 `ReplaceAll` 在小写混杂形态下会漏），每条只改一个词、
+  语义不变：`powered by → running on`、`through → via`、`they mean → that means`；harness 名字保留。
+  预检标记用 `"DeepSeek Harness"` / `"deepseek harness"`，只是提到产品名的正文逐字节不动（有测试守护）。
+- **取证落盘**（新增 `internal/server/contentblock_dump.go`）：`ErrContentBlocked` 时把出站请求体与
+  上游响应体写进 `<state 同目录>/content-blocks/`（单份 8 MiB 上限、保留 20 份、按 rune 边界截断、
+  原子写、失败只 WARN），供下一枚未知指纹离线复盘；配置键
+  `logging.content_block_dump_{enabled,max_mb,keep}`。App 侧在 `LocalGatewayManager` 生成的 config 里
+  **显式开启**（手机上既没有命令行也没有 stdout，这份落盘是唯一证据）。
+- **新工具** `cmd/fingerprint-probe`：`-list` / `-system-file` / `-body-file`（吃落盘体）/ `-bisect`
+  （块 → 行 → 句递归收缩到最小触发子串）/ `-sanitize=false`；直连上游、不经网关（不污染降级状态）。
+  本次两枚指纹即由它定位。
+- **构建脚本**（`android/build_gateway.ps1`）：本仓库不含 Go 源码，旧脚本从仓库根找 `cmd/server` 必失败，
+  新增 `-SourceRoot` 与工作区同级自动探测（找不到 fail fast 并给出可直接复制的命令）；`go build` 前
+  `Push-Location` 到源码根（`go build` 按**当前目录**定位 module，传绝对包路径也会报
+  `cannot find main module`）；日志打印 Go 源码 rev，`.so` 因此可溯源到面板仓库提交。
+
+**验证**：
+
+- 真实渲染 system prompt 打上游：修复前 **400/11-128** → 修复后 **200**；`sanitize=false` 对照仍 400
+  （排除上游抖动）；另 4 份会话变体（7660/7650/7654/6598 B）全部 200。
+- 内嵌 `libwb2api.so`（arm64-v8a / x86_64）字节校验：两枚指纹的改写串、取证落盘串均存在，旧包不存在。
+- 面板仓库 `go test ./...` 全绿；新增回归用例 `TestHarnessIdentityRewritten` /
+  `…LowercaseRewritten` / `…WebSurfaceRewritten` / `…MentionOnlyUntouched` 与 4 条落盘用例。
+
+**影响面**：只改写命中这两处指纹的文本（`system`/`developer`/`user`/`assistant`/`tool_calls`/`reasoning_content` 全覆盖）；
+其余请求字节不变。`custom` 模式本就替换客户端 system，不受影响。
+
+---
 ## 3.10.1 — 2026-10-25
 
 ### 修复：对话页「添加文件」点击后不弹系统选择器

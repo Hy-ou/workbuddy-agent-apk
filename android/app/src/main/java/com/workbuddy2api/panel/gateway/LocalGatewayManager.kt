@@ -264,6 +264,14 @@ class LocalGatewayManager private constructor(private val app: Application) {
                 put("request_retention_days", 7)
                 put("request_archive_max_mb", 100)
                 put("request_client_info", true)
+                // 内容拦截取证：撞上游 HTTP 400 + code 11-128（"Illegal API invocation
+                // from an unapproved channel"）时，把**出站请求体**与上游响应体落到
+                // <workDir>/data/content-blocks/，供 cmd/fingerprint-probe 二分定位触发
+                // 指纹。网关侧缺省即开，这里显式写出来：手机上没有命令行、没有 stdout，
+                // 用户报障时这一份落盘是唯一能离线复盘的证据。
+                put("content_block_dump_enabled", true)
+                put("content_block_dump_max_mb", 8)
+                put("content_block_dump_keep", 20)
             }
             putJsonObject("schedule") {
                 put("checkin_enabled", true)

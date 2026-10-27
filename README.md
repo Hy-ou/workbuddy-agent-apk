@@ -106,7 +106,8 @@ adb install -r WorkBuddy-3.10.0.apk
 
 ```powershell
 # 1) 交叉编译 Go 网关 → app/src/main/jniLibs/{arm64-v8a,x86_64}/libwb2api.so
-#    需要 workbuddy2api-panel 的 Go 源码（默认在上一级目录，可用 -Root 指定）
+#    需要 workbuddy2api-panel 的 Go 源码：默认取工作区同级仓库（..\workbuddy2api-panel），
+#    也可用 -SourceRoot <panel 仓库根> 显式指定；脚本会把源码 rev 打进日志便于溯源
 pwsh android/build_gateway.ps1
 
 # 2) 打包 DSH 运行时：改写 ELF 依赖名 → jniLibs；内核树 → assets/payload-dsh.zip

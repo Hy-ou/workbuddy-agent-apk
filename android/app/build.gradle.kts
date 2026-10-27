@@ -13,8 +13,8 @@ android {
         applicationId = "com.workbuddy2api.panel"
         minSdk = 24
         targetSdk = 35
-        versionCode = 22
-        versionName = "3.10.1"
+        versionCode = 23
+        versionName = "3.10.2"
         vectorDrawables { useSupportLibrary = true }
         ndk { abiFilters += listOf("arm64-v8a", "x86_64") }
     }
