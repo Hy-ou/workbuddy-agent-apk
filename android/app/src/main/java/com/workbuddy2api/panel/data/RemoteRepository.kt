@@ -101,6 +101,11 @@ class RemoteWbRepository(serverUrl: String, apiKey: String) : WbRepository {
     override suspend fun loginPoll(state: String): LoginPoll =
         getJson("login/poll?state=" + enc(state), timeout = 60)
 
+    override suspend fun importCockpit(fileName: String, content: ByteArray): ImportResult =
+        WbJson.decodeFromString<ImportResult>(
+            api.postFile("import/cockpit", fileName, content, timeoutSec = 300),
+        )
+
     override suspend fun accountAction(uid: String, action: AccountAction): ActionResult =
         postJson("accounts/${enc(uid)}/${action.path}", null, timeout = 120)
 

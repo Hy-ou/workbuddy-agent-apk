@@ -182,6 +182,18 @@ class DemoWbRepository(private val delayMs: Long = 120) : WbRepository {
         )
     }
 
+    override suspend fun importCockpit(fileName: String, content: ByteArray): ImportResult {
+        tick()
+        if (content.isEmpty()) return ImportResult(ok = false, error = "文件为空（演示）")
+        return ImportResult(
+            ok = true,
+            total = 3,
+            imported = 2,
+            skipped = 1,
+            errors = listOf("missing required fields (id=demo-3)"),
+        )
+    }
+
     override suspend fun accountAction(uid: String, action: AccountAction): ActionResult {
         tick()
         val index = accounts.indexOfFirst { it.uid == uid }

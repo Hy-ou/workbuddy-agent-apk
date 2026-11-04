@@ -42,7 +42,9 @@
 ### 管理面板（Jetpack Compose）
 - 6 个一级 Tab：**总览 / 账号 / 助手 / 任务 / 日志 / 设置**，全部按手机端手势与密度重排。
 - 总览：账号池可用率、并发/在途、积分汇总、快捷操作（签到/余额/旅行/活动/保活）、账号健康排序。
-- 账号、任务队列、请求日志、设置（连接、外观、刷新、助手引擎、文件访问、服务器二级页）。
+- 账号：搜索/筛选与卡片详情；「添加账号」支持浏览器 OAuth 登录，以及与 Web 端一致的
+  **cockpit tools JSON 批量导入**（系统文件选择器选文件，成功/跳过/错误逐条回显）。
+- 任务队列、请求日志、设置（连接、外观、刷新、助手引擎、文件访问、服务器二级页）。
 
 ### 原生助手
 - 走网关的 OpenAI 兼容接口，SSE 流式输出，支持多会话、模型选择。
@@ -82,10 +84,11 @@
 
 ```bash
 # 从 Release 页面下载对应 APK 后安装
-adb install -r WorkBuddy-3.10.0.apk
+adb install -r WorkBuddy-3.11.0.apk
 ```
 
-首次启动后：自动拉起内置网关（`127.0.0.1:7863`），在「账号」页扫码/登录添加账号，即可使用；
+首次启动后：自动拉起内置网关（`127.0.0.1:7863`），在「账号」页登录添加账号（也可在「添加账号 →
+导入 JSON」中选 cockpit tools 导出的文件批量导入），即可使用；
 「助手」页默认为原生对话，可在「设置 → 助手引擎」切换为 DSH 内核。
 
 ### 2.2 从源码构建
@@ -138,7 +141,7 @@ cd android
 | 项 | 版本 |
 |---|---|
 | 应用包名 | `com.workbuddy2api.panel` |
-| 应用版本 | **3.10.0**（versionCode 21） |
+| 应用版本 | **3.11.0**（versionCode 24） |
 | minSdk / targetSdk / compileSdk | 24 / 35 / 35 |
 | Kotlin | 2.0.21 |
 | AGP / Gradle | 8.7.3 / 8.10.2 |
@@ -299,17 +302,17 @@ APK 体积约 117 / 128 MB（超出 GitHub 单文件 100 MB 限制），因此**
 
 | 附件 | 大小 | 说明 |
 |---|---|---|
-| `WorkBuddy-3.10.0.apk` | 116.7 MB | 正式包，`adb install -r` 即可 |
-| `WorkBuddy-3.10.0-debug.apk` | 127.8 MB | 调试包（`run-as`、WebView 远程调试） |
+| `WorkBuddy-3.11.0.apk` | 116.7 MB | 正式包，`adb install -r` 即可 |
+| `WorkBuddy-3.11.0-debug.apk` | 127.9 MB | 调试包（`run-as`、WebView 远程调试） |
 | `SHA256SUMS` | — | 校验值 |
 
 ```bash
 # 下载（二选一）
-gh release download v3.10.0 -R Hy-ou/workbuddy-agent-apk -p "*.apk"
+gh release download v3.11.0 -R Hy-ou/workbuddy-agent-apk -p "*.apk"
 # 或浏览器打开 https://github.com/Hy-ou/workbuddy-agent-apk/releases/latest
 
 sha256sum -c SHA256SUMS
-adb install -r WorkBuddy-3.10.0.apk
+adb install -r WorkBuddy-3.11.0.apk
 ```
 
 发布新版本的流程见 [release/README.md](release/README.md)，上传脚本为

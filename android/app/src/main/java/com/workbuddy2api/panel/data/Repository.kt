@@ -48,6 +48,13 @@ interface WbRepository {
     suspend fun loginStart(realm: String): LoginStart
     suspend fun loginPoll(state: String): LoginPoll
 
+    /**
+     * 上传 cockpit tools 导出的账号数组 JSON，批量导入账号池。
+     *
+     * 与服务端 `POST /panel/api/import/cockpit` 一致：返回总数/成功/跳过数与逐条错误。
+     */
+    suspend fun importCockpit(fileName: String, content: ByteArray): ImportResult
+
     suspend fun accountAction(uid: String, action: AccountAction): ActionResult
     suspend fun bulkAction(action: BulkAction): ActionResult
 

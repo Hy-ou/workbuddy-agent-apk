@@ -48,6 +48,64 @@ class WbApiTest {
         assertTrue(req.getHeader("Content-Type")!!.startsWith("application/json"))
     }
 
+    @Test fun importCockpitUploadsMultipartJsonFile() = runBlocking {
+        server.enqueue(
+            MockResponse().setHeader("Content-Type", "application/json")
+                .setBody("{\"ok\":true,\"total\":2,\"imported\":2,\"skipped\":0,\"errors\":null}"),
+        )
+        val repo = RemoteWbRepository(server.url("/").toString(), "sk-test")
+        val json = "[{\"uid\":\"u1\",\"access_token\":\"a\",\"refresh_token\":\"r\"}]"
+        val res = repo.importCockpit("cockpit-accounts.json", json.toByteArray())
+
+        assertTrue(res.ok)
+        assertEquals(2, res.total)
+        assertEquals(2, res.imported)
+        assertEquals(0, res.skipped)
+        assertTrue(res.errors.isEmpty())
+
+        val req = server.takeRequest()
+        assertEquals("POST", req.method)
+        assertEquals("/panel/api/import/cockpit", req.path)
+        assertEquals("Bearer sk-test", req.getHeader("Authorization"))
+        assertTrue(req.getHeader("Content-Type")!!.startsWith("multipart/form-data"))
+        val body = req.body.readUtf8()
+        assertTrue(body.contains("name=\"file\""))
+        assertTrue(body.contains("filename=\"cockpit-accounts.json\""))
+        assertTrue(body.contains("\"uid\":\"u1\""))
+    }
+
+    @Test fun importCockpitParsesSkippedErrors() = runBlocking {
+        server.enqueue(
+            MockResponse().setHeader("Content-Type", "application/json")
+                .setBody(
+                    "{\"ok\":true,\"total\":1,\"imported\":0,\"skipped\":1," +
+                        "\"errors\":[\"missing required fields (id=x)\"]}",
+                ),
+        )
+        val repo = RemoteWbRepository(server.url("/").toString(), "k")
+        val res = repo.importCockpit("bad-entry.json", "[{}]".toByteArray())
+        assertEquals(1, res.total)
+        assertEquals(0, res.imported)
+        assertEquals(1, res.skipped)
+        assertEquals(1, res.errors.size)
+        assertTrue(res.errors[0].contains("missing required fields"))
+    }
+
+    @Test fun importCockpitSurfacesServerError() = runBlocking {
+        server.enqueue(
+            MockResponse().setResponseCode(400)
+                .setBody("{\"ok\":false,\"error\":\"invalid json: unexpected end of JSON input\"}"),
+        )
+        val repo = RemoteWbRepository(server.url("/").toString(), "k")
+        try {
+            repo.importCockpit("bad.json", "not-json".toByteArray())
+            fail("expected WbHttpException")
+        } catch (e: WbHttpException) {
+            assertEquals(400, e.status)
+            assertTrue(e.message!!.contains("invalid json"))
+        }
+    }
+
     @Test fun unauthorizedMapsToApiKeyMessage() = runBlocking {
         server.enqueue(MockResponse().setResponseCode(401).setBody("{\"ok\":false,\"error\":\"invalid_api_key\"}"))
         try {

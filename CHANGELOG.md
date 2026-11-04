@@ -5,6 +5,32 @@
 
 ---
 
+## 3.11.0 — 2026-11-04
+
+### 新增：账号页支持通过 JSON 文件批量添加账号（对齐 Web 端）
+
+**背景**：Web 面板的「添加账号」弹窗有「浏览器登录 / 导入 JSON」两个页签，可上传 cockpit tools
+导出的账号数组一次补号；手机端此前只有 OAuth 授权一条路径，换机或批量补号时只能逐个登录。
+
+**实现**（客户端功能，网关侧 `POST /panel/api/import/cockpit` 已有，无需改 Go 代码）：
+
+- **数据层**：`WbApi` 新增 `postFile()`（`multipart/form-data`，字段名 `file`，默认 5 分钟超时——
+  服务端导入时会逐账号签到/查额度）；`WbRepository` 新增 `importCockpit(fileName, bytes)`，
+  解析 `{ok,total,imported,skipped,errors}`；演示仓库返回模拟结果。
+- **界面**：账号页 FAB「添加账号」弹层新增「浏览器登录 / 导入 JSON」页签。切到「导入 JSON」后
+  用系统文件选择器（SAF，`OpenDocument`，支持 `application/json` / `octet-stream` / `text`）选文件，
+  选中即上传（与 Web 端一致），就地显示「成功 N 个 / 跳过 N 个 / 共 N 个」及前 3 条错误，
+  成功后自动刷新账号列表。
+- **边界**：单文件上限 32 MiB（与服务端 `ParseMultipartForm` 对齐）；空文件、读不到文件、
+  账号数组格式错误、旧版网关 404（提示升级）均有中文错误提示；导入中禁用按钮并显示进度。
+
+**验证**：`WbApiTest` 新增 `importCockpitUploadsMultipartJsonFile`（断言路径、Bearer、multipart
+文件名/内容）与 `importCockpitSurfacesServerError`（400 invalid json 透传）；`compileDebugKotlin`、
+`lintDebug`、`testDebugUnitTest`、`assembleRelease` / `assembleDebug` 均通过。内置 `libwb2api.so`
+已含该路由（字节校验 `POST /panel/api/import/cockpit`）。产物 `release/WorkBuddy-3.11.0.apk`
+（116.7 MB，SHA-256 `9ac51996…204edb10`）与 debug 包已生成，详见 `release/SHA256SUMS`。
+
+---
 ## 3.10.2 — 2026-10-27
 
 ### 修复：每天首次请求被上游内容防火墙拦下（400 / code 11-128），随后一整天降级

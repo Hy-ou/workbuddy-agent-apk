@@ -7,8 +7,10 @@ import kotlinx.serialization.json.contentOrNull
 import kotlinx.serialization.json.jsonObject
 import kotlinx.serialization.json.jsonPrimitive
 import okhttp3.MediaType.Companion.toMediaType
+import okhttp3.MultipartBody
 import okhttp3.OkHttpClient
 import okhttp3.Request
+import okhttp3.RequestBody
 import okhttp3.RequestBody.Companion.toRequestBody
 import java.io.Closeable
 import java.io.IOException
@@ -34,19 +36,55 @@ class WbApi(baseUrl: String, private val apiKey: String) : Closeable {
     private val root = apiBase(baseUrl)
     private val jsonMedia = "application/json; charset=utf-8".toMediaType()
 
-    suspend fun get(path: String, timeoutSec: Long = 60): String = execute(path, null, timeoutSec, post = false)
+    /**
+     * 上传/导入用的客户端：请求体可能较大（32 MB），服务端又要逐账号签到后一次性返回，
+     * 因此写超时放宽到 5 分钟、读超时交给 call timeout（默认 300 s）兜底。
+     */
+    private val uploadClient: OkHttpClient by lazy {
+        client.newBuilder()
+            .readTimeout(0, TimeUnit.SECONDS)
+            .writeTimeout(300, TimeUnit.SECONDS)
+            .build()
+    }
+
+    suspend fun get(path: String, timeoutSec: Long = 60): String = execute(path, null, timeoutSec)
 
     suspend fun post(path: String, json: String? = null, timeoutSec: Long = 60): String =
-        execute(path, json, timeoutSec, post = true)
+        execute(path, (json ?: "").toRequestBody(jsonMedia), timeoutSec)
 
-    private suspend fun execute(path: String, body: String?, timeoutSec: Long, post: Boolean): String =
+    /**
+     * 以 multipart/form-data 上传单个文件（账号 JSON 导入等接口）。
+     *
+     * 服务端 `ParseMultipartForm(32MB)`，这里默认给足 5 分钟：批量导入会逐账号
+     * 做签到/额度查询，账号多时耗时明显长于普通请求。
+     */
+    suspend fun postFile(
+        path: String,
+        fileName: String,
+        bytes: ByteArray,
+        fieldName: String = "file",
+        timeoutSec: Long = 300,
+    ): String {
+        val body = MultipartBody.Builder()
+            .setType(MultipartBody.FORM)
+            .addFormDataPart(fieldName, fileName, bytes.toRequestBody(jsonMedia))
+            .build()
+        return execute(path, body, timeoutSec, uploadClient)
+    }
+
+    private suspend fun execute(
+        path: String,
+        body: RequestBody?,
+        timeoutSec: Long,
+        httpClient: OkHttpClient = client,
+    ): String =
         withContext(Dispatchers.IO) {
             val url = if (path.startsWith("http://") || path.startsWith("https://")) path
             else root.trimEnd('/') + "/" + path.trimStart('/')
             val builder = Request.Builder().url(url)
             if (apiKey.isNotBlank()) builder.header("Authorization", "Bearer $apiKey")
-            if (post) builder.post((body ?: "").toRequestBody(jsonMedia)) else builder.get()
-            val call = client.newCall(builder.build())
+            if (body != null) builder.post(body) else builder.get()
+            val call = httpClient.newCall(builder.build())
             if (timeoutSec > 0 && timeoutSec != 60L) {
                 call.timeout().timeout(timeoutSec, TimeUnit.SECONDS)
             }

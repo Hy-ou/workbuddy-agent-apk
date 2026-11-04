@@ -27,6 +27,17 @@ data class SchoolVoucherAccount(
 @Serializable
 data class SchoolVouchersPage(val accounts: List<SchoolVoucherAccount> = emptyList())
 
+/** cockpit tools 的 JSON 批量导入结果（POST /import/cockpit）。 */
+@Serializable
+data class ImportResult(
+    val ok: Boolean = false,
+    val total: Int = 0,
+    val imported: Int = 0,
+    val skipped: Int = 0,
+    val errors: List<String> = emptyList(),
+    val error: String = "",
+)
+
 @Serializable
 data class ConfigSaveResult(
     val ok: Boolean = false,

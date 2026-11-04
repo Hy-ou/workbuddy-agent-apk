@@ -1,8 +1,12 @@
 package com.workbuddy2api.panel.ui.accounts
 
 import android.content.ActivityNotFoundException
+import android.content.Context
 import android.content.Intent
 import android.net.Uri
+import android.provider.OpenableColumns
+import androidx.activity.compose.rememberLauncherForActivityResult
+import androidx.activity.result.contract.ActivityResultContracts
 import androidx.compose.foundation.background
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
@@ -18,7 +22,9 @@ import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.layout.width
 import androidx.compose.foundation.lazy.LazyColumn
 import androidx.compose.foundation.lazy.items
+import androidx.compose.foundation.rememberScrollState
 import androidx.compose.foundation.shape.RoundedCornerShape
+import androidx.compose.foundation.verticalScroll
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.filled.Add
 import androidx.compose.material.icons.filled.MoreVert
@@ -54,6 +60,7 @@ import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 import com.workbuddy2api.panel.data.Account
 import com.workbuddy2api.panel.data.BulkAction
+import com.workbuddy2api.panel.data.ImportResult
 import com.workbuddy2api.panel.data.Overview
 import com.workbuddy2api.panel.data.WbHttpException
 import com.workbuddy2api.panel.data.WbRepository
@@ -82,8 +89,10 @@ import com.workbuddy2api.panel.util.creditsText
 import com.workbuddy2api.panel.util.msText
 import com.workbuddy2api.panel.util.remainText
 import com.workbuddy2api.panel.util.shortUid
+import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.delay
 import kotlinx.coroutines.launch
+import kotlinx.coroutines.withContext
 import java.time.Duration
 import java.time.Instant
 
@@ -532,6 +541,7 @@ private fun AddAccountSheet(
     val sheetState = rememberModalBottomSheetState(skipPartiallyExpanded = true)
 
     var realm by remember { mutableStateOf("cn") }
+    var mode by remember { mutableIntStateOf(0) }
     var starting by remember { mutableStateOf(false) }
     var loginState by remember { mutableStateOf<String?>(null) }
     var authUrl by remember { mutableStateOf<String?>(null) }
@@ -575,8 +585,9 @@ private fun AddAccountSheet(
         }
     }
 
-    // 轮询授权结果：key 为 state，弹层关闭（composable 离开）时自动取消。
-    LaunchedEffect(loginState) {
+    // 轮询授权结果：key 为 state/mode，弹层关闭（composable 离开）或切到导入页签时自动取消。
+    LaunchedEffect(loginState, mode) {
+        if (mode != 0) return@LaunchedEffect
         val state = loginState ?: return@LaunchedEffect
         while (true) {
             delay(3000L)
@@ -618,88 +629,266 @@ private fun AddAccountSheet(
         Column(
             Modifier
                 .fillMaxWidth()
+                .verticalScroll(rememberScrollState())
                 .padding(horizontal = 16.dp)
                 .padding(bottom = 28.dp),
         ) {
             Text("添加账号", style = MaterialTheme.typography.titleLarge, color = colors.ink)
             Spacer(Modifier.height(6.dp))
             Text(
-                "选择版本后在系统浏览器完成授权，App 会自动获取结果。",
+                if (mode == 0) {
+                    "选择版本后在系统浏览器完成授权，App 会自动获取结果。"
+                } else {
+                    "选择 cockpit tools 导出的 JSON 文件，批量导入账号。"
+                },
                 style = MaterialTheme.typography.bodySmall,
                 color = colors.ink3,
             )
 
-            Spacer(Modifier.height(16.dp))
-            Text("版本", style = MaterialTheme.typography.labelLarge, color = colors.ink2)
-            Spacer(Modifier.height(8.dp))
+            Spacer(Modifier.height(12.dp))
             FilterChips(
-                labels = listOf("国内版", "国际版"),
-                selectedIndex = if (realm == "global") 1 else 0,
-                onSelect = { index -> realm = if (index == 1) "global" else "cn" },
+                labels = listOf("浏览器登录", "导入 JSON"),
+                selectedIndex = mode,
+                onSelect = { mode = it },
             )
 
-            Spacer(Modifier.height(20.dp))
-            when {
-                done -> {
-                    Text("授权成功", style = MaterialTheme.typography.titleMedium, color = colors.ok)
-                    Spacer(Modifier.height(4.dp))
-                    val creditsSuffix = doneCredits
-                        ?.let { if (it >= 0) " · 余额 ${creditsText(it)}" else "" }
-                        .orEmpty()
-                    Text(
-                        text = "已添加 ${doneNickname ?: "新账号"}$creditsSuffix",
-                        style = MaterialTheme.typography.bodyMedium,
-                        color = colors.ink2,
-                    )
-                }
+            if (mode == 1) {
+                Spacer(Modifier.height(16.dp))
+                ImportJsonPane(repo = repo, onDismiss = onDismiss, onChanged = onChanged)
+            } else {
+                Spacer(Modifier.height(16.dp))
+                Text("版本", style = MaterialTheme.typography.labelLarge, color = colors.ink2)
+                Spacer(Modifier.height(8.dp))
+                FilterChips(
+                    labels = listOf("国内版", "国际版"),
+                    selectedIndex = if (realm == "global") 1 else 0,
+                    onSelect = { index -> realm = if (index == 1) "global" else "cn" },
+                )
 
-                loginState != null -> {
-                    Row(verticalAlignment = Alignment.CenterVertically) {
-                        CircularProgressIndicator(
-                            modifier = Modifier.size(16.dp),
-                            strokeWidth = 2.dp,
-                            color = colors.accent,
-                        )
-                        Spacer(Modifier.width(10.dp))
+                Spacer(Modifier.height(20.dp))
+                when {
+                    done -> {
+                        Text("授权成功", style = MaterialTheme.typography.titleMedium, color = colors.ok)
+                        Spacer(Modifier.height(4.dp))
+                        val creditsSuffix = doneCredits
+                            ?.let { if (it >= 0) " · 余额 ${creditsText(it)}" else "" }
+                            .orEmpty()
                         Text(
-                            "等待浏览器完成授权…",
+                            text = "已添加 ${doneNickname ?: "新账号"}$creditsSuffix",
                             style = MaterialTheme.typography.bodyMedium,
                             color = colors.ink2,
                         )
                     }
-                    Spacer(Modifier.height(8.dp))
-                    Text(
-                        "浏览器未自动打开？可点下方按钮重新打开授权页。",
-                        style = MaterialTheme.typography.bodySmall,
-                        color = colors.ink3,
-                    )
+
+                    loginState != null -> {
+                        Row(verticalAlignment = Alignment.CenterVertically) {
+                            CircularProgressIndicator(
+                                modifier = Modifier.size(16.dp),
+                                strokeWidth = 2.dp,
+                                color = colors.accent,
+                            )
+                            Spacer(Modifier.width(10.dp))
+                            Text(
+                                "等待浏览器完成授权…",
+                                style = MaterialTheme.typography.bodyMedium,
+                                color = colors.ink2,
+                            )
+                        }
+                        Spacer(Modifier.height(8.dp))
+                        Text(
+                            "浏览器未自动打开？可点下方按钮重新打开授权页。",
+                            style = MaterialTheme.typography.bodySmall,
+                            color = colors.ink3,
+                        )
+                        Spacer(Modifier.height(12.dp))
+                        WbButton(
+                            text = "重新打开授权页",
+                            onClick = { authUrl?.let { openInBrowser(it) } },
+                            modifier = Modifier.fillMaxWidth(),
+                        )
+                    }
+
+                    else -> {
+                        WbButton(
+                            text = when {
+                                starting -> "正在创建授权…"
+                                error != null -> "重新授权"
+                                else -> "开始授权"
+                            },
+                            onClick = { startLogin() },
+                            modifier = Modifier.fillMaxWidth(),
+                            enabled = !starting,
+                            primary = true,
+                        )
+                    }
+                }
+
+                error?.let { message ->
                     Spacer(Modifier.height(12.dp))
-                    WbButton(
-                        text = "重新打开授权页",
-                        onClick = { authUrl?.let { openInBrowser(it) } },
-                        modifier = Modifier.fillMaxWidth(),
-                    )
+                    Text(message, style = MaterialTheme.typography.bodySmall, color = colors.bad)
                 }
-
-                else -> {
-                    WbButton(
-                        text = when {
-                            starting -> "正在创建授权…"
-                            error != null -> "重新授权"
-                            else -> "开始授权"
-                        },
-                        onClick = { startLogin() },
-                        modifier = Modifier.fillMaxWidth(),
-                        enabled = !starting,
-                        primary = true,
-                    )
-                }
-            }
-
-            error?.let { message ->
-                Spacer(Modifier.height(12.dp))
-                Text(message, style = MaterialTheme.typography.bodySmall, color = colors.bad)
             }
         }
     }
 }
+
+/** 单个 JSON 文件体积上限，与服务端 `ParseMultipartForm(32 MiB)` 对齐。 */
+private const val IMPORT_JSON_MAX_BYTES = 32 * 1024 * 1024
+
+/**
+ * 「导入 JSON」页签：选择 cockpit tools 导出的账号数组文件，上传给网关批量导入。
+ *
+ * 与 Web 端一致：选中文件后立即上传，结果就地展示（成功/跳过/错误条目），
+ * 成功后触发列表刷新；导入由服务端逐条校验 uid / access_token / refresh_token。
+ */
+@Composable
+private fun ImportJsonPane(
+    repo: WbRepository,
+    onDismiss: () -> Unit,
+    onChanged: () -> Unit,
+) {
+    val colors = LocalWbColors.current
+    val context = LocalContext.current
+    val scope = rememberCoroutineScope()
+
+    var importing by remember { mutableStateOf(false) }
+    var fileName by remember { mutableStateOf("") }
+    var result by remember { mutableStateOf<ImportResult?>(null) }
+    var error by remember { mutableStateOf<String?>(null) }
+
+    val picker = rememberLauncherForActivityResult(ActivityResultContracts.OpenDocument()) { uri ->
+        if (uri == null) return@rememberLauncherForActivityResult
+        importing = true
+        result = null
+        error = null
+        scope.launch {
+            try {
+                val (name, bytes) = withContext(Dispatchers.IO) {
+                    val resolved = queryDisplayName(context, uri) ?: "accounts.json"
+                    val content = context.contentResolver.openInputStream(uri)?.use { it.readBytes() }
+                        ?: throw IllegalStateException("无法读取该文件")
+                    resolved to content
+                }
+                if (bytes.isEmpty()) throw IllegalStateException("文件为空")
+                if (bytes.size > IMPORT_JSON_MAX_BYTES) throw IllegalStateException("文件超过 32 MB，无法导入")
+                fileName = name
+                val res = repo.importCockpit(name, bytes)
+                if (res.ok) {
+                    result = res
+                    onChanged()
+                } else {
+                    error = res.error.ifBlank { "导入失败" }
+                }
+            } catch (e: Exception) {
+                error = if (e is WbHttpException && e.status == 404) {
+                    "当前服务器不支持 JSON 导入，请升级网关或改用内置网关"
+                } else {
+                    acctErrorMessage(e)
+                }
+            } finally {
+                importing = false
+            }
+        }
+    }
+
+    Text(
+        "文件需为账号数组格式（cockpit tools 导出），每条包含 uid、access_token、refresh_token。",
+        style = MaterialTheme.typography.bodySmall,
+        color = colors.ink3,
+    )
+
+    Spacer(Modifier.height(12.dp))
+    WbButton(
+        text = if (importing) "正在导入…" else "选择 JSON 文件",
+        onClick = {
+            picker.launch(arrayOf("application/json", "application/octet-stream", "text/plain"))
+        },
+        modifier = Modifier.fillMaxWidth(),
+        enabled = !importing,
+        primary = true,
+    )
+
+    if (importing) {
+        Spacer(Modifier.height(12.dp))
+        Row(verticalAlignment = Alignment.CenterVertically) {
+            CircularProgressIndicator(
+                modifier = Modifier.size(16.dp),
+                strokeWidth = 2.dp,
+                color = colors.accent,
+            )
+            Spacer(Modifier.width(10.dp))
+            Text(
+                "正在导入 ${fileName.ifBlank { "JSON 文件" }}…",
+                style = MaterialTheme.typography.bodyMedium,
+                color = colors.ink2,
+            )
+        }
+        Spacer(Modifier.height(6.dp))
+        Text(
+            "导入时会顺带签到并查询余额，账号多时需要稍等。",
+            style = MaterialTheme.typography.bodySmall,
+            color = colors.ink3,
+        )
+    }
+
+    result?.let { r ->
+        Spacer(Modifier.height(16.dp))
+        Text("导入完成", style = MaterialTheme.typography.titleMedium, color = colors.ok)
+        Spacer(Modifier.height(4.dp))
+        Text(
+            buildString {
+                append("成功 ${r.imported} 个")
+                if (r.skipped > 0) append("，跳过 ${r.skipped} 个")
+                append("（共 ${r.total} 个）")
+            },
+            style = MaterialTheme.typography.bodyMedium,
+            color = colors.ink2,
+        )
+        if (r.errors.isNotEmpty()) {
+            Spacer(Modifier.height(8.dp))
+            Text(
+                r.errors.take(3).joinToString("\n"),
+                style = MaterialTheme.typography.bodySmall,
+                color = colors.warn,
+                maxLines = 3,
+                overflow = TextOverflow.Ellipsis,
+            )
+            if (r.errors.size > 3) {
+                Text(
+                    "另有 ${r.errors.size - 3} 条错误未显示",
+                    style = MaterialTheme.typography.bodySmall,
+                    color = colors.ink3,
+                )
+            }
+        }
+        Spacer(Modifier.height(16.dp))
+        WbButton(
+            text = "完成",
+            onClick = onDismiss,
+            modifier = Modifier.fillMaxWidth(),
+            primary = true,
+        )
+    }
+
+    error?.let { message ->
+        Spacer(Modifier.height(12.dp))
+        Text("导入失败：$message", style = MaterialTheme.typography.bodySmall, color = colors.bad)
+    }
+
+    if (result == null && error == null && !importing) {
+        Spacer(Modifier.height(10.dp))
+        Text(
+            "缺失必填字段的条目会被跳过，不影响其余账号导入。",
+            style = MaterialTheme.typography.bodySmall,
+            color = colors.ink3,
+        )
+    }
+}
+
+/** 读取系统文件选择器返回的显示名（拿不到时回退为 null）。 */
+private fun queryDisplayName(context: Context, uri: Uri): String? = runCatching {
+    context.contentResolver.query(uri, null, null, null, null)?.use { cursor ->
+        val index = cursor.getColumnIndex(OpenableColumns.DISPLAY_NAME)
+        if (index >= 0 && cursor.moveToFirst()) cursor.getString(index) else null
+    }
+}.getOrNull()?.takeIf { it.isNotBlank() }
