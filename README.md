@@ -111,6 +111,9 @@ adb install -r WorkBuddy-3.11.0.apk
 # 1) 交叉编译 Go 网关 → app/src/main/jniLibs/{arm64-v8a,x86_64}/libwb2api.so
 #    需要 workbuddy2api-panel 的 Go 源码：默认取工作区同级仓库（..\workbuddy2api-panel），
 #    也可用 -SourceRoot <panel 仓库根> 显式指定；脚本会把源码 rev 打进日志便于溯源
+#    注意：本项目的 DSH 指纹脱敏补丁（含 3.11.1 的 @ 路径引用指纹）在 fork 分支：
+#    https://github.com/Hy-ou/workbuddy2api-panel/tree/fix/dsh-fingerprint-3.11.1
+#    上游 main 已移除这段逻辑，直接用上游源码构建会重新出现 content blocked WARN
 pwsh android/build_gateway.ps1
 
 # 2) 打包 DSH 运行时：改写 ELF 依赖名 → jniLibs；内核树 → assets/payload-dsh.zip
