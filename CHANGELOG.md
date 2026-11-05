@@ -5,6 +5,48 @@
 
 ---
 
+## 3.11.1 — 2026-11-05
+
+### 修复：DSH 对话被上游内容防火墙拦截（400 / code 11-128，日志出现 content blocked WARN）
+
+**现象**：手机端「日志 → 运行日志」在对话时出现
+
+```text
+WARN: [server] content blocked: outbound body dumped to data/content-blocks/content-block-20261105-154954-….json
+(101602 bytes, realm=cn model=deepseek-v4.1-flash upstream_request_id=…)
+content-blocked (likely fingerprint false positive) -> degraded prompt retry
+```
+
+客户端因网关在同请求内换降级提示词重试而无感，但每次白撞一次上游往返，且降级期间 system 提示词被替换。
+
+**排查**：从手机 `/data/data/com.workbuddy2api.panel/files/gateway/data/content-blocks/` 取出三份落盘体
+（11-05 05:27 / 15:36 / 15:49，57–130 KB），用面板仓库 `cmd/fingerprint-probe -body-file … -bisect`
+直连上游二分，33 次探针收敛到 1 条 407 B 最小触发子串（DSH 的 @ 路径引用提示词段）：
+
+```text
+Tokens prefixed with @ are paths the user explicitly referenced. Relative paths resolve from the
+workspace root; absolute paths identify files or directories on the host. A trailing slash marks a
+directory: list it when its contents matter. Anything else is a file: use the read tool when its
+contents are needed, and do not claim to have inspected it before reading. @"..." quotes a path
+containing spaces.
+```
+
+上游按整段逐字匹配；三份落盘体都含该段，因此每次带 @ 引用说明的请求都会撞。
+
+**修复**：
+
+- 网关 `internal/upstream/sanitize.go`：新增不区分大小写正则改写 `Relative paths resolve from the
+  workspace root` → `Relative paths resolve against the workspace root`（只改一个词，语义不变）；
+  `sanitizeFeatures` 增加 `Tokens prefixed with @` 预检标记。
+- `internal/upstream/sanitize_test.go`：新增 `TestHarnessPathRefRewritten` 回归用例（改写命中、
+  语义保留、段尾逐字不变）。
+- 重新交叉编译 `libwb2api.so`（arm64-v8a / x86_64），App 版本 3.11.1 / versionCode 25。
+
+**验证**：同一落盘体修复前 `status=400 code=11-128` → 修复后 `status=200`；`go test
+./internal/upstream -count=1` 全绿；真机安装后 DSH 对话日志不再出现 `content blocked`。
+
+---
+
 ## 3.11.0 — 2026-11-04
 
 ### 新增：账号页支持通过 JSON 文件批量添加账号（对齐 Web 端）

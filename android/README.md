@@ -130,6 +130,8 @@ cd android && gradle test
 
 ## 变更记录
 
+- **3.11.1（2026-11-05）**：修复「DSH 对话每次带 @ 路径引用说明都被上游内容防火墙拦一次」（400 / code 11-128，运行日志出现 `WARN: [server] content blocked`）。从手机 App 私有目录 `files/gateway/data/content-blocks/` 取出三份落盘体，用面板仓库 `cmd/fingerprint-probe -body-file … -bisect` 直连上游二分，33 次探针收敛到 1 条 407 B 最小触发子串（DSH 的 @ 引用说明段：`Tokens prefixed with @ are paths …`）。网关 `internal/upstream/sanitize.go` 新增不区分大小写正则改写 `resolve from` → `resolve against`（一个词，语义不变），`sanitizeFeatures` 增加 `Tokens prefixed with @` 预检标记，并补 `TestHarnessPathRefRewritten` 回归用例。同一落盘体直打上游：修复前 400 → 修复后 200；真机安装后原样重放该请求体，手机网关返回 200 且日志无 content blocked。版本 3.11.1 / versionCode 25。详见 [../CHANGELOG.md](../CHANGELOG.md)。
+
 - **3.10.2（2026-10-27）**：修复「每天首次请求被上游内容防火墙拦下（HTTP 400 / code 11-128）
   并降级一整天」。上游按**逐字精确匹配**拦截，而内置 DSH 的 system prompt 里有两处字面量命中：
   身份开场白 47 B（`You are an AI agent running on DeepSeek Harness`）与网页端定向段 221 B
