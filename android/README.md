@@ -130,6 +130,17 @@ cd android && gradle test
 
 ## 变更记录
 
+- **3.11.2（2026-11-06）**：修复「Web 面板导出的账号 JSON 在手机端导入失败」。面板导出的是
+  与 `auths/workbuddy-*.json` 同构的嵌套形（`auth` / `account` / `device_token`），而网关
+  `POST /panel/api/import/cockpit` 之前只解析 cockpit tools 的扁平数组：单账号对象直接 400
+  （`cannot unmarshal object into Go value of type []panel.cockpitAccount`），批量数组则被忽略成
+  空字段、全部跳过（`missing required fields (id=)`）。网关 `internal/panel/import.go` 新增
+  `parseImportAccounts`，同时兼容 cockpit 扁平数组、面板单账号对象与面板批量数组；嵌套形统一
+  折算成导入结构（`expiresAt` 秒→毫秒，`realm` / `enterpriseId` / `device_token` 保留）。
+  重新交叉编译 `libwb2api.so`（arm64-v8a / x86_64），App 版本 3.11.2 / versionCode 26。
+  验证：单账号/批量导出文件导入 `imported=1 / 2, skipped=0`；原 cockpit 数组回归通过；
+  `go test ./...` 与 Android `testDebugUnitTest` 全绿。详见 [../CHANGELOG.md](../CHANGELOG.md)。
+
 - **3.11.1（2026-11-05）**：修复「DSH 对话每次带 @ 路径引用说明都被上游内容防火墙拦一次」（400 / code 11-128，运行日志出现 `WARN: [server] content blocked`）。从手机 App 私有目录 `files/gateway/data/content-blocks/` 取出三份落盘体，用面板仓库 `cmd/fingerprint-probe -body-file … -bisect` 直连上游二分，33 次探针收敛到 1 条 407 B 最小触发子串（DSH 的 @ 引用说明段：`Tokens prefixed with @ are paths …`）。网关 `internal/upstream/sanitize.go` 新增不区分大小写正则改写 `resolve from` → `resolve against`（一个词，语义不变），`sanitizeFeatures` 增加 `Tokens prefixed with @` 预检标记，并补 `TestHarnessPathRefRewritten` 回归用例。同一落盘体直打上游：修复前 400 → 修复后 200；真机安装后原样重放该请求体，手机网关返回 200 且日志无 content blocked。版本 3.11.1 / versionCode 25。详见 [../CHANGELOG.md](../CHANGELOG.md)。
 
 - **3.10.2（2026-10-27）**：修复「每天首次请求被上游内容防火墙拦下（HTTP 400 / code 11-128）

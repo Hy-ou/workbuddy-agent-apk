@@ -736,10 +736,11 @@ private fun AddAccountSheet(
 private const val IMPORT_JSON_MAX_BYTES = 32 * 1024 * 1024
 
 /**
- * 「导入 JSON」页签：选择 cockpit tools 导出的账号数组文件，上传给网关批量导入。
+ * 「导入 JSON」页签：选择账号数组文件，上传给网关批量导入。
  *
- * 与 Web 端一致：选中文件后立即上传，结果就地展示（成功/跳过/错误条目），
- * 成功后触发列表刷新；导入由服务端逐条校验 uid / access_token / refresh_token。
+ * 服务端兼容 cockpit tools 扁平数组与面板自身导出的嵌套形凭证（单账号对象 /
+ * 批量数组）；选中文件后立即上传，结果就地展示（成功/跳过/错误条目），
+ * 成功后触发列表刷新。
  */
 @Composable
 private fun ImportJsonPane(
@@ -780,10 +781,12 @@ private fun ImportJsonPane(
                     error = res.error.ifBlank { "导入失败" }
                 }
             } catch (e: Exception) {
-                error = if (e is WbHttpException && e.status == 404) {
-                    "当前服务器不支持 JSON 导入，请升级网关或改用内置网关"
-                } else {
-                    acctErrorMessage(e)
+                error = when {
+                    e is WbHttpException && e.status == 404 ->
+                        "当前服务器不支持 JSON 导入，请升级网关或改用内置网关"
+                    e is WbHttpException && e.message.contains("cannot unmarshal object into Go value of type []panel.cockpitAccount") ->
+                        "当前服务器不支持面板导出的凭证格式，请升级网关到 3.11.2+，或改用内置网关"
+                    else -> acctErrorMessage(e)
                 }
             } finally {
                 importing = false
@@ -792,7 +795,7 @@ private fun ImportJsonPane(
     }
 
     Text(
-        "文件需为账号数组格式（cockpit tools 导出），每条包含 uid、access_token、refresh_token。",
+        "支持 cockpit tools 导出的账号数组，也支持本面板导出的凭证 JSON（单个账号或批量数组）。",
         style = MaterialTheme.typography.bodySmall,
         color = colors.ink3,
     )

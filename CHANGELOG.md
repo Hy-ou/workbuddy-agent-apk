@@ -5,6 +5,40 @@
 
 ---
 
+## 3.11.2 — 2026-11-06
+
+### 修复：面板导出的账号 JSON 在手机端导入失败（格式不兼容）
+
+**现象**：Web 面板「导出」/「批量导出」得到的 JSON，在 App「添加账号 → 导入 JSON」中选择后报错：
+
+- 单账号导出（对象）→ `导入失败：invalid json: json: cannot unmarshal object into Go value of type []panel.cockpitAccount`
+- 批量导出（数组）→ 显示「成功 0 个，跳过 N 个」，错误 `missing required fields (id=)`
+
+**根因**：两端格式不一致。面板导出的是与 `auths/workbuddy-*.json` 同构的嵌套形：
+
+```json
+{"auth":{"accessToken":"…","refreshToken":"…","expiresAt":1753600000,"domain":"…","realm":"cn"},
+ "account":{"uid":"…","enterpriseId":"","nickname":"…"},"device_token":"…"}
+```
+
+而网关 `POST /panel/api/import/cockpit` 只按 cockpit tools 的扁平数组解析：
+`[{uid,access_token,refresh_token,expires_at(毫秒),...}]`。嵌套对象被 `json.Unmarshal` 直接拒绝，
+嵌套数组则被扁平结构忽略成空字段，表现为 400 或全量跳过。
+
+**修复**：
+
+- 网关 `internal/panel/import.go` 新增 `parseImportAccounts`：兼容 cockpit 扁平数组、面板单账号对象、
+  面板批量数组；嵌套形统一折算成 cockpit 结构（`expiresAt` 秒→毫秒，`realm` / `enterpriseId` /
+  `device_token` 保留）。
+- 导入循环改为显式 `realm` 优先，`enterprise_id` / `device_token` 一并落盘。
+- 重新交叉编译 `libwb2api.so`（arm64-v8a / x86_64），App 版本 3.11.2 / versionCode 26。
+- App 导入页提示改为「支持 cockpit tools 账号数组，也支持本面板导出的凭证 JSON（单个或批量）」。
+
+**验证**：单账号/批量导出文件在网关侧导入 `imported=1 / 2, skipped=0`；原 cockpit 扁平数组仍兼容；
+`go test ./...` 全绿；Android `testDebugUnitTest` 通过。
+
+---
+
 ## 3.11.1 — 2026-11-05
 
 ### 修复：DSH 对话被上游内容防火墙拦截（400 / code 11-128，日志出现 content blocked WARN）
