@@ -76,6 +76,7 @@ fun DiagnosticsCard(modifier: Modifier = Modifier) {
     var updateState by remember { mutableStateOf("") }
     var checking by remember { mutableStateOf(false) }
     var latestUrl by remember { mutableStateOf<String?>(null) }
+    val isMiui = remember { DeviceEnv.isMiui(context) }
 
     WbCard(modifier.fillMaxWidth()) {
         Text("运行体检", style = MaterialTheme.typography.titleSmall, color = wb.ink)
@@ -103,6 +104,27 @@ fun DiagnosticsCard(modifier: Modifier = Modifier) {
             }
         }
         Spacer(Modifier.height(10.dp))
+
+        // 锁屏冻结：HyperOS 的 GreezeManager 会冻结整个 UID（前台服务也不豁免），
+        // 冻结后 Go 网关一起停摆，只能靠系统级「无限制」放行。
+        if (isMiui) {
+            Row(Modifier.fillMaxWidth(), verticalAlignment = Alignment.CenterVertically) {
+                Column(Modifier.weight(1f)) {
+                    Text("锁屏冻结（HyperOS）", style = MaterialTheme.typography.bodyMedium, color = wb.ink)
+                    Text(
+                        "系统在锁屏约 12 秒后冻结整个应用（前台服务不豁免），网关会暂停；" +
+                            "把省电策略改为「无限制」并允许自启动后才会持续运行。",
+                        style = MaterialTheme.typography.bodySmall,
+                        color = wb.warn,
+                    )
+                }
+                WbButton("省电策略", onClick = { DeviceEnv.openAppDetails(context) })
+            }
+            Row(Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.End) {
+                WbButton("自启动管理", onClick = { DeviceEnv.openAutoStartSettings(context) })
+            }
+            Spacer(Modifier.height(10.dp))
+        }
 
         // WebView / ABI
         InfoLine(

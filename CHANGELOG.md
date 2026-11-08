@@ -5,6 +5,43 @@
 
 ---
 
+## 3.11.3 — 2026-11-08
+
+### 修复：锁屏后内置网关「停止工作」（进程还在但不应答 / 过夜后进程消失）
+
+**现象**：锁屏一段时间再回来，通知还在、`libwb2api.so` 也还在，但锁屏期间网关的定时任务
+（签到 / 保活 / 余额刷新）一条都没跑，`/healthz` 直接超时；锁屏过夜后更严重——通知消失、
+进程没了，只能重开 App。
+
+**根因（四层叠加，按触发顺序）**：
+
+1. **HyperOS 的 GreezeManager 锁屏即冻结整个 UID**（`reason=screen_off`；切后台是 `reason=tobg`）：
+   日志里明明打印了 `HasForegroundService`，仍判 `freeze_able` —— 前台服务在这套 ROM 上不是豁免条件。
+   冻结按 UID 生效，`libwb2api.so` 与宿主同处 `apps/uid_x/pid_y` cgroup，一起停摆，
+   `wb:gateway` wakelock 被系统置为 `DISABLED`。
+2. 全程没有 wakelock：前台服务只防回收、不防 CPU 休眠，屏幕一灭 Go 的定时器就停。
+3. `foregroundServiceType="dataSync"` + targetSdk 35：Android 15+ 该类型有 6 小时 / 24 小时后台配额，
+   跑满后系统回调 `Service.onTimeout()`，默认实现直接抛异常杀进程（锁屏过夜必现）。
+4. 没有恢复路径：`onDestroy` 无条件 `stop()` 杀网关，`START_STICKY` 重建服务后不重拉网关，
+   也没有看门狗 / 回前台自检 —— 一次中断就永久停摆。
+
+**修复**：
+
+- 前台服务类型 `dataSync` → `specialUse`（`PROPERTY_SPECIAL_USE_FGS_SUBTYPE=local_api_gateway`，无配额），
+  新增 `WAKE_LOCK` / `FOREGROUND_SERVICE_SPECIAL_USE` 权限。
+- `GatewayService`：服务存活期持 `PARTIAL_WAKE_LOCK`（看门狗 30s 幂等续持）、重写 `onTimeout()`、
+  30s 看门狗 `ensureRunning()`、`onTaskRemoved` 不跟着停、`onDestroy` 只在用户主动停止时才杀网关。
+- `LocalGatewayManager`：新增 `ensureRunning()`（幂等重拉）、`stopByUser()` / `consumeStopRequest()`
+  （区分用户停止与系统回收）、`watchExit()`（进程退出立刻置 Failed，杜绝「假活」）。
+- `AppViewModel` + `MainActivity`：`ON_RESUME` 自检，解锁回前台自动恢复并重挂顺延端口。
+- 设置页「运行体检」新增 **锁屏冻结（HyperOS）** 引导，一键跳「省电策略」/「自启动管理」。
+
+**验证**（Redmi M332BF / Android 17）：`types=0x40000000`（specialUse）、`PARTIAL_WAKE_LOCK 'wb:gateway'`
+已持有；关屏 8 分钟复现 `cgroup.freeze=1` + `/healthz` 超时，解锁后 `freeze=0`、`/healthz` 立即 200。
+HyperOS 仍需把省电策略设为「无限制」，完整复现与验证步骤见 `docs/troubleshooting.md` 第 12 节。
+
+---
+
 ## 3.11.2 — 2026-11-06
 
 ### 修复：面板导出的账号 JSON 在手机端导入失败（格式不兼容）

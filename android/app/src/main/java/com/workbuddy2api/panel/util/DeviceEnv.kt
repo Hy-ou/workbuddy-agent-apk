@@ -43,6 +43,39 @@ object DeviceEnv {
         }
     }
 
+    /**
+     * 是否 MIUI / HyperOS。
+     *
+     * 这些 ROM 的 GreezeManager 会在「锁屏」时冻结整个 UID（日志 reason=screen_off），
+     * 即使应用持有前台服务和 wakelock 也不豁免——冻结后子进程（Go 网关）一起停摆，
+     * 只有把应用的省电策略改成「无限制」才会被放过。所以设置页要单独引导。
+     */
+    fun isMiui(context: Context): Boolean =
+        Build.MANUFACTURER.equals("Xiaomi", ignoreCase = true) ||
+            runCatching { context.packageManager.getPackageInfo("com.miui.securitycenter", 0) }.isSuccess
+
+    /** 打开「自启动管理」（HyperOS：授权后锁屏冻结通常一并解除）。 */
+    fun openAutoStartSettings(context: Context) {
+        val direct = Intent().setComponent(
+            android.content.ComponentName(
+                "com.miui.securitycenter",
+                "com.miui.permcenter.autostart.AutoStartManagementActivity",
+            ),
+        )
+        if (runCatching { context.startActivity(direct.addFlags(Intent.FLAG_ACTIVITY_NEW_TASK)) }.isSuccess) return
+        openAppDetails(context)
+    }
+
+    /** 打开本应用的系统详情页（HyperOS 的「省电策略 → 无限制」在这里）。 */
+    fun openAppDetails(context: Context) {
+        val detail = Intent(
+            Settings.ACTION_APPLICATION_DETAILS_SETTINGS,
+            Uri.parse("package:${context.packageName}"),
+        )
+        if (runCatching { context.startActivity(detail.addFlags(Intent.FLAG_ACTIVITY_NEW_TASK)) }.isSuccess) return
+        requestIgnoreBatteryOptimization(context)
+    }
+
     /** 从 WebView UA 里取 Chromium 主版本号；取不到返回 0。 */
     fun chromeMajor(userAgent: String?): Int {
         if (userAgent.isNullOrBlank()) return 0

@@ -2,6 +2,7 @@ package com.workbuddy2api.panel.gateway
 
 import android.app.Application
 import android.content.Context
+import android.util.Log
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.StateFlow
@@ -43,6 +44,7 @@ class LocalGatewayManager private constructor(private val app: Application) {
         private const val PORT_TRIES = 10
         private const val BINARY_NAME = "libwb2api.so"
         private const val HEALTH_PATH = "/healthz"
+        private const val TAG = "wb-gateway"
 
         @Volatile
         private var instance: LocalGatewayManager? = null
@@ -61,6 +63,10 @@ class LocalGatewayManager private constructor(private val app: Application) {
     @Volatile
     private var process: Process? = null
 
+    /** 用户主动停止标记：为 true 时 Service 销毁才允许杀网关，系统回收不算。 */
+    @Volatile
+    private var stopRequested = false
+
     fun workDir(): File = File(app.filesDir, "gateway").apply { mkdirs() }
 
     fun logFile(): File = File(workDir(), "gateway.log")
@@ -69,6 +75,7 @@ class LocalGatewayManager private constructor(private val app: Application) {
 
     /** 启动（幂等）。失败时返回 Failed 并保留原因。 */
     suspend fun start(): GatewayStatus = mutex.withLock {
+        stopRequested = false
         val current = _status.value
         if (current is GatewayStatus.Running && process?.aliveCompat() == true) {
             return@withLock current
@@ -81,6 +88,34 @@ class LocalGatewayManager private constructor(private val app: Application) {
         }
         _status.value = result
         result
+    }
+
+    /**
+     * 确保网关在跑（看门狗 / 服务重建 / 回到前台共用）。
+     *
+     * 与 [start] 的区别：进程已经退出、但内存状态还停在 Running 时，这里会真正重拉；
+     * 已经处于 Starting 时直接返回，避免和正在进行的启动抢锁。
+     */
+    suspend fun ensureRunning(): GatewayStatus {
+        val p = process
+        val current = _status.value
+        if (p != null && p.aliveCompat() && current is GatewayStatus.Running) return current
+        if (current is GatewayStatus.Starting) return current
+        Log.i(TAG, "ensureRunning：网关不在运行，重新拉起")
+        return start()
+    }
+
+    /** 用户主动停止（断开连接 / 关网关）：置标记后再停，Service 销毁时才真正杀进程。 */
+    fun stopByUser() {
+        stopRequested = true
+        stop()
+    }
+
+    /** GatewayService.onDestroy 取走标记：只有用户主动停止才允许杀子进程。 */
+    fun consumeStopRequest(): Boolean {
+        val v = stopRequested
+        stopRequested = false
+        return v
     }
 
     private fun doStart(): GatewayStatus {
@@ -140,6 +175,7 @@ class LocalGatewayManager private constructor(private val app: Application) {
         }
         process = p
         pumpLog(p, log)
+        watchExit(p)
 
         if (!waitHealthy(p, port)) {
             val tail = logTail(16)
@@ -209,6 +245,24 @@ class LocalGatewayManager private constructor(private val app: Application) {
             }
         }, "wb-gateway-log").apply { isDaemon = true }.start()
     }
+    /**
+     * 监听子进程退出（LMK / ROM 清理 / 自身崩溃）。
+     *
+     * 网关是独立进程，父进程不会收到任何回调；不盯着就会出现"状态还是 Running、
+     * 实际端口已经没人应答"的假活。退出后把状态置 Failed，前台服务看门狗 30s 内重拉。
+     */
+    private fun watchExit(p: Process) {
+        Thread({
+            val code = runCatching { p.waitFor() }.getOrDefault(-1)
+            // process 已被 stop()/restart() 置空或替换：属于正常流程，不覆盖状态。
+            if (process === p) {
+                process = null
+                _status.value = GatewayStatus.Failed("网关进程已退出（code=$code），等待自动重启")
+                Log.w(TAG, "网关进程退出 code=$code")
+            }
+        }, "wb-gateway-watch").apply { isDaemon = true }.start()
+    }
+
     /** API 24 兼容：Process#isAlive 是 API 26。 */
     private fun Process.aliveCompat(): Boolean = try {
         exitValue()

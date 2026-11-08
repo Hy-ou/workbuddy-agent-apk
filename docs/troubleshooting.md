@@ -191,3 +191,85 @@ adb forward tcp:9222 localabstract:webview_devtools_remote_$(adb shell pidof com
 adb shell appops set --uid com.workbuddy2api.panel MANAGE_EXTERNAL_STORAGE allow
 adb shell appops set --uid com.workbuddy2api.panel MANAGE_EXTERNAL_STORAGE deny
 ```
+
+---
+
+## 12. 锁屏后网关"停止工作"（3.11.1 及以前）
+
+**现象**（Xiaomi M332BF / Android 17 / HyperOS）：
+
+- 白天在前台一切正常；锁屏一段时间再回来，通知还在、进程还在，但锁屏期间网关的定时任务（签到 / 保活 / 余额刷新）一条都没跑；
+- 从外部打 `/healthz` 直接超时，而 `ps` 里 `libwb2api.so` 活得好好的；
+- 锁屏过夜后更严重：通知消失、进程没了，只能重开 App；
+- 最迷惑的一点：通知写着「网关运行中」，实际端口无人应答。
+
+**定位（关键四步）**：
+
+```bash
+# 1) 前台服务类型：dataSync（Android 15+ 有 6 小时/24 小时后台配额）
+adb shell dumpsys activity services com.workbuddy2api.panel | grep types=
+#   types=0x00000001
+
+# 2) 进程「活着」但不应答：先看是不是被冻结（cgroup v2 freezer）
+adb shell cat /sys/fs/cgroup/apps/uid_<UID>/pid_<PID>/cgroup.freeze
+#   1 = 已冻结
+
+# 3) 谁冻的：小米自己的 GreezeManager，不是 AOSP 的 CachedAppOptimizer
+adb shell logcat -b system -d | grep -E "PolicyMaker|GreezeManager|ActionExecute"
+#   PolicyMaker : HasForegroundService pkgName=com.workbuddy2api.panel uid:10519
+#   PolicyMaker : uid=10519 reason=freeze_able
+#   GreezeManager: FZ uid = 10519 reason = screen_off success !
+#   ActionExecute: freezeUid SUCCESS: uid=10519 pkg=com.workbuddy2api.panel reason=screen_off
+
+# 4) wakelock 被一起废掉
+adb shell dumpsys power | grep -i "wb:gateway"
+#   PARTIAL_WAKE_LOCK 'wb:gateway' DISABLED (uid=10519 isFrozen=true ...)
+```
+
+**根因（四层，按触发顺序）**：
+
+1. **HyperOS 的 GreezeManager 锁屏即冻结整个 UID**（`reason=screen_off`；切后台时是 `reason=tobg`）。
+   它日志里明明打印了 `HasForegroundService`，仍然判 `freeze_able`——**前台服务在这套 ROM 上不是豁免条件**。
+   冻结按 UID 生效，`libwb2api.so` 和宿主在同一个 `apps/uid_x/pid_y` cgroup 里，一起被冻；
+   系统同时把 `wb:gateway` wakelock 置为 `DISABLED`。这就是「进程还在、网关不工作」的直接原因。
+2. **没有 wakelock**：即使 ROM 不冻结，前台服务也只防回收、不防 CPU 休眠；屏幕一灭 SoC suspend，
+   Go 进程的定时器同样停摆。
+3. **`dataSync` 前台服务有 6 小时 / 24 小时配额**（targetSdk 35 + Android 15+）：锁屏过夜跑满配额后
+   系统回调 `Service.onTimeout()`，默认实现直接抛异常杀进程——对应「过夜后进程消失」。
+4. **没有任何恢复路径**：`onDestroy` 无条件 `stop()` 杀网关；`START_STICKY` 重建服务后
+   `onStartCommand` 只刷新通知、不重建网关；没有看门狗、没有 `BOOT_COMPLETED`、没有回前台自检。
+
+**修复（3.11.3）**：
+
+- `AndroidManifest.xml`：加 `WAKE_LOCK`、`FOREGROUND_SERVICE_SPECIAL_USE`；服务类型 `dataSync` → `specialUse`
+  （`PROPERTY_SPECIAL_USE_FGS_SUBTYPE=local_api_gateway`，无配额）。
+- `GatewayService`：服务存活期持 `PARTIAL_WAKE_LOCK`（看门狗每 30s 幂等续持）；
+  `startForegroundCompat()` 显式带 `FOREGROUND_SERVICE_TYPE_SPECIAL_USE`；重写 `onTimeout()` 重新提交前台状态；
+  30s 看门狗 `ensureRunning()`；`onTaskRemoved` 不跟着停；`onDestroy` 只在「用户主动停止」时才杀网关。
+- `LocalGatewayManager`：新增 `ensureRunning()`（幂等重拉）、`stopByUser()` / `consumeStopRequest()`
+  （区分用户停止与系统回收）、`watchExit()`（进程退出立刻置 Failed，杜绝假活）。
+- `AppViewModel` + `MainActivity`：`ON_RESUME` 自检 `ensureLocalGateway()`，解锁回前台自动恢复，
+  并重挂可能顺延的端口。
+- 设置页「运行体检」新增 **锁屏冻结（HyperOS）** 引导：一键跳「省电策略」和「自启动管理」。
+
+**HyperOS 上必须同时做（应用无法自行豁免）**：
+
+设置 → 应用设置 → 应用管理 → WorkBuddy → **省电策略 = 无限制**；并允许**自启动**；
+最近任务里给应用**上锁**。否则系统仍会在锁屏 / 切后台后冻结 UID。
+
+**验证**：
+
+```bash
+adb shell dumpsys activity services com.workbuddy2api.panel | grep types=   # 0x40000000 = specialUse
+adb shell dumpsys power | grep -i "wb:gateway"                            # PARTIAL_WAKE_LOCK 已持有
+adb shell input keyevent 26                                               # 关屏
+adb shell cat /sys/fs/cgroup/apps/uid_10519/pid_<PID>/cgroup.freeze       # 1=被冻结 0=正常运行
+adb shell 'printf "GET /healthz HTTP/1.0\r\n\r\n" | toybox nc -w 5 127.0.0.1 7863'
+```
+
+实测结果：未加白名单时，关屏约 12s 后 `cgroup.freeze=1`、`/healthz` 超时、wakelock 变 `DISABLED`；
+按电源键解锁后 `cgroup.freeze=0`、`/healthz` 立即 200、wakelock 自动恢复。加「无限制」后可用同样步骤复测，
+应保持 `freeze=0`。
+
+**两个坑**：`input keyevent 223`（KEYCODE_SLEEP）在该 ROM 上无效，关屏要用 `input keyevent 26`（POWER）；
+`input` 需要开发者选项里的「USB 调试(安全设置)」，否则报 `INJECT_EVENTS`。

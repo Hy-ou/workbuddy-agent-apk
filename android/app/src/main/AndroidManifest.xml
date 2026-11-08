@@ -5,7 +5,11 @@
     <uses-permission android:name="android.permission.INTERNET" />
     <uses-permission android:name="android.permission.ACCESS_NETWORK_STATE" />
     <uses-permission android:name="android.permission.FOREGROUND_SERVICE" />
-    <uses-permission android:name="android.permission.FOREGROUND_SERVICE_DATA_SYNC" />
+    <!-- 网关是常驻本地服务：dataSync 类型在 Android 15+ 有 6 小时/24 小时配额，
+         超时会回调 onTimeout 并杀进程（锁屏过夜必现），因此改用 specialUse。 -->
+    <uses-permission android:name="android.permission.FOREGROUND_SERVICE_SPECIAL_USE" />
+    <!-- 锁屏后 CPU 不休眠，网关的定时任务才能继续跑（前台服务本身不挡 suspend）。 -->
+    <uses-permission android:name="android.permission.WAKE_LOCK" />
     <uses-permission android:name="android.permission.POST_NOTIFICATIONS" />
     <uses-permission android:name="android.permission.REQUEST_IGNORE_BATTERY_OPTIMIZATIONS" />
     <!-- Shizuku 特权通道（可选）：用户安装 Shizuku 并授权后，AI 才能以 shell 身份执行系统命令 -->
@@ -43,7 +47,11 @@
         <service
             android:name=".gateway.GatewayService"
             android:exported="false"
-            android:foregroundServiceType="dataSync" />
+            android:foregroundServiceType="specialUse">
+            <property
+                android:name="android.app.PROPERTY_SPECIAL_USE_FGS_SUBTYPE"
+                android:value="local_api_gateway" />
+        </service>
 
         <service
             android:name="com.workbuddy2api.panel.agent.WbAccessibilityService"

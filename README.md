@@ -224,7 +224,7 @@ DSH 目录：`files/dsh/`（内核树、`dshhome`、`dsh-web.log`、`dsh-node.pi
 | 权限 | 用途 |
 |---|---|
 | `INTERNET` / `ACCESS_NETWORK_STATE` | 访问网关与上游 |
-| `FOREGROUND_SERVICE`(+`DATA_SYNC`) | 网关前台保活 |
+| `FOREGROUND_SERVICE`(+`SPECIAL_USE`) / `WAKE_LOCK` | 网关前台保活（specialUse 无 6 小时配额；wakelock 挡锁屏 CPU 休眠） |
 | `POST_NOTIFICATIONS` | 网关/内核运行通知 |
 | `MANAGE_EXTERNAL_STORAGE` | 让 DSH 检索、读写手机文件（设置页申请） |
 | `READ/WRITE_EXTERNAL_STORAGE`（maxSdk 32/29） | Android 10 及以下的等价能力 |

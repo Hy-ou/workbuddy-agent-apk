@@ -153,6 +153,25 @@ class AppViewModel(app: Application) : AndroidViewModel(app) {
 
     fun localGatewayRunning(): Boolean = gateway.isRunning()
 
+    /**
+     * 回到前台时自检（MainActivity ON_RESUME 调用）。
+     *
+     * 本地模式下如果网关/前台服务被系统回收过（锁屏超时、ROM 清理、进程被杀），
+     * 这里自动把它拉回来；端口若被顺延也一并重新挂载会话，不需要用户手动重连。
+     */
+    fun ensureLocalGateway() {
+        val s = _session.value ?: return
+        if (!s.local || s.demo) return
+        viewModelScope.launch {
+            val st = runCatching { gateway.ensureRunning() }.getOrNull() ?: return@launch
+            if (st is GatewayStatus.Running) {
+                val url = localUrl(st.port)
+                val cur = _session.value ?: s
+                if (cur.serverUrl != url) attachSession(url, st.apiKey, local = true, cur)
+            }
+        }
+    }
+
     /** 进入演示模式（无需服务器，展示完整手机布局）。 */
     fun enterDemo() {
         viewModelScope.launch {
@@ -173,7 +192,7 @@ class AppViewModel(app: Application) : AndroidViewModel(app) {
             val old = _session.value ?: Session()
             val next = old.copy(serverUrl = "", apiKey = "", demo = false, local = false)
             settings.save(next)
-            if (old.local) gateway.stop()
+            if (old.local) gateway.stopByUser()
             closeRepo()
             _agentClient.value = null
             _repo.value = null

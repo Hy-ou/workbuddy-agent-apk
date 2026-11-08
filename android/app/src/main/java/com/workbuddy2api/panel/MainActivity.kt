@@ -16,11 +16,15 @@ import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.Surface
 import androidx.compose.runtime.Composable
+import androidx.compose.runtime.DisposableEffect
 import androidx.compose.runtime.SideEffect
 import androidx.compose.runtime.getValue
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.platform.LocalView
 import androidx.core.view.WindowCompat
+import androidx.lifecycle.Lifecycle
+import androidx.lifecycle.LifecycleEventObserver
+import androidx.lifecycle.compose.LocalLifecycleOwner
 import androidx.lifecycle.compose.collectAsStateWithLifecycle
 import androidx.lifecycle.viewmodel.compose.viewModel
 import com.workbuddy2api.panel.data.AppViewModel
@@ -132,6 +136,16 @@ class MainActivity : ComponentActivity() {
 @Composable
 private fun WbRoot(startTab: Int, startMode: String) {
     val vm: AppViewModel = viewModel()
+    // 回到前台自检：锁屏/后台期间网关若被系统回收（超时、清理、进程被杀），
+    // 这里自动拉起并把可能顺延的端口重新挂到会话上，用户不需要手动重连。
+    val lifecycleOwner = LocalLifecycleOwner.current
+    DisposableEffect(lifecycleOwner) {
+        val observer = LifecycleEventObserver { _, event ->
+            if (event == Lifecycle.Event.ON_RESUME) vm.ensureLocalGateway()
+        }
+        lifecycleOwner.lifecycle.addObserver(observer)
+        onDispose { lifecycleOwner.lifecycle.removeObserver(observer) }
+    }
     val session by vm.session.collectAsStateWithLifecycle()
     val repo by vm.repo.collectAsStateWithLifecycle()
     val dark = when (session?.themeMode ?: "dark") {
