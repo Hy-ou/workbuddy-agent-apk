@@ -5,6 +5,81 @@
 
 ---
 
+## 3.13.0 — 2026-11-10
+
+### 新增：安卓虚拟屏（Agent 后台操作，不影响真机）
+
+- **能力**：新增 `VirtualScreen`（`vdisplay/VirtualScreen.kt`）。基于系统 overlay display
+  （`settings put global overlay_display_devices`，与开发者选项「模拟辅助显示」同一机制），
+  通过 Shizuku（uid 2000）创建/销毁一块不对应物理屏幕的显示，并支持：
+  截图（`screencap -d`）、点击/滑动/按键/文字（`input -d`）、列出桌面应用并
+  `am start --display` 启动到虚拟屏。
+- **关闭即还原**：创建前记录用户原本的 `overlay_display_devices` 值，关闭时原样恢复，
+  不污染开发者选项；displayId 优先从 `DisplayManager` 读取，ROM 不暴露时用截图反查兜底。
+- **控制台 UI**：「设置 → 虚拟屏」新增二级页：开启/关闭、三种预设分辨率、实时画面
+  （1.5s 自动刷新，可关）、点画面远程点按（按虚拟屏分辨率换算坐标）、文字/返回/桌面注入、
+  应用搜索与一键启动、Shizuku 授权入口。截图落 `cache/vdisplay/latest.png`。
+- **DSH 内核**：插件 `@workbuddy/dsh-mobile` 新增 `wb_vdisplay`（status/start/stop/apps/launch）、
+  `wb_vscreen`（截图路径）、`wb_vinput`（tap/swipe/key/text）；宿主桥新增 `POST /vdisplay`；
+  环境手册新增「虚拟屏」一节（何时用、坐标基准、结束要 stop、单实例应用提醒、不做支付类操作）。
+- **原生助手**：`MobileTools` 新增 `vdisplay` / `vlaunch` / `vscreen` / `vtap` / `vswipe` /
+  `vtype` / `vkey` 工具与协议说明（不依赖无障碍，只要求 Shizuku）。
+- **前置条件**：Android 10+（API 29）且 Shizuku 已授权；未满足时页面与工具都给出可读提示。
+- **已知限制**：单实例应用（如微信）启动到虚拟屏后真机窗口会被移走；`FLAG_SECURE` 页面截图黑屏；
+  真机熄屏后 overlay 显示可能停止合成；虚拟屏内的操作是真实账号操作，禁止用于支付/转账。
+  详见 [docs/virtual-display.md](docs/virtual-display.md)。
+
+### 版本
+
+- `versionCode 29` / `versionName 3.13.0`
+- 构建验证：`:app:assembleRelease` / `:app:assembleDebug` 通过；`testDebugUnitTest` 58 项通过；
+  `lintDebug` 0 error；插件自检 `node android/dsh/tests/wb-mobile.selftest.mjs` 7 个工具通过。
+  已在 Redmi 25019PNF3C（Android 17 / arm64）上安装并启动验证：App 正常进入总览、设置与「虚拟屏」控制台；该机已安装 Shizuku 但本机测试时未启动/授权，虚拟屏的创建/截图/注入未实测。
+
+---
+
+## 3.12.0 — 2026-11-10
+
+### 新增：DSH 控制台全屏沉浸
+
+- 进入「助手 → DSH 内核」默认全屏：隐藏 App 顶栏（标题 / 网关信息 / 日志 / 重启）与底部
+  6 Tab 导航，同时隐藏系统状态栏与手势条（上滑可临时唤出），WebView 占满整屏；
+  全屏态下按 `WindowInsets.displayCutout` 避让挖孔 / 刘海，无开孔机型仍是纯整屏。
+- 顶部居中浮动「退出全屏」胶囊按钮：一点回到 App 界面（顶栏 + 底部导航恢复）；
+  退出全屏后 DSH 顶栏新增「全屏使用」按钮可再次进入；系统返回键优先退出全屏，
+  不会一按就直接退出 App。
+- 进出全屏只改变布局约束，不重建 WebView（页面状态、输入框内容、滚动位置都保留）。
+- 全屏状态用 `rememberSaveable` 保存在当前会话；切到其它 Tab 再回来仍是全屏。
+
+### 优化：整体卡顿 / 掉帧
+
+1. **视口修复脚本重写**（最大头）：旧实现挂在 `document.documentElement` 上的
+   `childList+subtree` MutationObserver 会在聊天流式输出时被每个 token 触发，随后全量遍历
+   所有样式表 + 所有 `[style]` 元素做 `setProperty`，相当于每 350ms 强制一次整页样式重算。
+   现在改为 `ResizeObserver` + 高度去重（只在视口真的变化时改一次高度），vh→px 全量换算
+   只在首帧做一次，运行时新增的 `<style>` 只补丁该节点。
+2. **WebView 渲染**：底色由透明改为不透明（少一层整屏 alpha 混合）、开启
+   `offscreenPreRaster`（长会话滚动更稳）、关闭 overscroll 与滚动条；
+   页面主题色回调直接修改 WebView 背景与系统栏图标，不再回传 Compose 状态，避免主题切换
+   触发整屏重组与 WebView 重新布局。
+3. **日志**：release 包的 `console.log` 不再逐条写 logcat（只保留告警 / 错误并 300ms 限流），
+   流式输出时渲染线程不再被日志 I/O 拖慢；debug 包保持全量。
+4. **WebView 生命周期**：离开 DSH 页 / 内核重启时主动 `stopLoading + removeView + destroy`，
+   反复进出不再累积渲染进程与 JS 堆（长时间使用后的整体变慢）。
+5. **重组范围**：`agentClient` / `gatewayStatus` 只在原生助手分支订阅，DSH 页不再跟着网关
+   状态变化整屏重组；DSH 的进度 / 错误分支单独成层。
+6. **轮询**：`Loader` 静默轮询结果与旧值相等时不写状态、`quiet` 刷新不再拨动 `refreshing`
+   （总览每 5 秒整表重组 + 下拉刷新指示器闪烁）；轮询绑定生命周期，后台不再打接口，
+   回前台立即静默刷新一次。
+
+### 版本
+
+- `versionCode 28` / `versionName 3.12.0`
+- 构建验证：`:app:assembleRelease` 通过；`testDebugUnitTest` 58 项全部通过；
+  未做真机帧率实测（本机无连接设备），全屏与掉帧相关改动以代码路径与构建验证为准。
+
+---
+
 ## 3.11.3 — 2026-11-08
 
 ### 修复：锁屏后内置网关「停止工作」（进程还在但不应答 / 过夜后进程消失）

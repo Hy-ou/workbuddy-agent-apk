@@ -62,6 +62,20 @@
   （`wb_sh` = `/system/bin/sh`、`wb_shizuku` = Shizuku uid 2000、`wb_env` 体检、`wb_notify` 通知），
   并把「这台手机有什么」写成 system prompt 里的环境手册，避免 Agent 反复调用不存在的 bash。
   详见 [docs/mobile-agent-plugin.md](docs/mobile-agent-plugin.md)。
+- **全屏沉浸控制台**：进入 DSH 页默认隐藏 App 顶栏与底部 6 Tab，并隐藏系统状态栏/手势条，
+  控制台占满整屏（自动避让挖孔/刘海）；顶部居中浮动「退出全屏」按钮，一点即回到 App 界面，
+  顶栏的「全屏使用」按钮可随时再进入，返回键优先退出全屏。
+
+### 虚拟屏（Agent 后台操作，不影响真机）
+- 系统里多出一块**不对应物理屏幕**的显示（overlay display），Agent 把 App 启动到这块屏上操作，
+  你的真机屏幕照常使用，两边互不干扰。
+- 「设置 → 虚拟屏」提供控制台：开启/关闭、三种预设分辨率、实时画面（可关自动刷新）、
+  点画面远程点按、文字/返回/桌面注入、应用搜索与一键启动；关闭时把系统
+  `overlay_display_devices` 恢复成创建前的值。
+- DSH 工具：`wb_vdisplay`（status/start/stop/apps/launch）、`wb_vscreen`（截图）、
+  `wb_vinput`（tap/swipe/key/text）；原生助手也提供同名能力。
+- 前置：Android 10+ 且 Shizuku 已授权。限制（单实例应用、FLAG_SECURE 黑屏等）见
+  [docs/virtual-display.md](docs/virtual-display.md)。
 
 ### 界面预览
 
@@ -143,7 +157,7 @@ cd android
 | 项 | 版本 |
 |---|---|
 | 应用包名 | `com.workbuddy2api.panel` |
-| 应用版本 | **3.11.2**（versionCode 26） |
+| 应用版本 | **3.13.0**（versionCode 29） |
 | minSdk / targetSdk / compileSdk | 24 / 35 / 35 |
 | Kotlin | 2.0.21 |
 | AGP / Gradle | 8.7.3 / 8.10.2 |
@@ -165,6 +179,7 @@ workbuddy-agent-apk/
 ├── docs/
 │   ├── architecture.md           ← 架构与关键实现
 │   ├── troubleshooting.md        ← 真机问题排查与修复记录
+│   ├── virtual-display.md        ← 安卓虚拟屏：原理、工具、限制
 │   └── upstream-integration.md   ← 参考项目的可整合功能评估
 ├── THIRD_PARTY.md                ← 第三方组件与许可
 └── android/
@@ -191,16 +206,18 @@ workbuddy-agent-apk/
         │   │   └── agent/                ← 原生助手：会话、模型、SSE 客户端
         │   ├── agent/                    ← 无障碍服务与手机工具
         │   ├── dsh/                      ← DSH 进程管理、文件访问权限
+        │   ├── vdisplay/                 ← 虚拟屏（overlay display + Shizuku）
         │   ├── util/                     ← 格式化、URL 等工具
         │   └── ui/
         │       ├── theme/ components/ state/
         │       ├── shell/                ← 底部导航 + 路由
         │       ├── overview/ accounts/ tasks/ logs/ connect/
-        │       ├── settings/             ← 设置页与 5 个二级页
+        │       ├── settings/             ← 设置页与二级页
         │       ├── assistant/            ← 原生助手界面
-        │       └── dsh/                  ← DSH 控制台（WebView）
+        │       ├── dsh/                  ← DSH 控制台（WebView）
+        │       └── vdisplay/             ← 虚拟屏控制台
         ├── main/res/                     ← 主题、图标、无障碍配置
-        └── test/                         ← 41 个单元测试 + 11 个真机 live fixture
+        └── test/                         ← 58 个单元测试 + 11 个真机 live fixture
 ```
 
 ---
@@ -252,6 +269,13 @@ DSH 目录：`files/dsh/`（内核树、`dshhome`、`dsh-web.log`、`dsh-node.pi
 adb shell am start -n com.workbuddy2api.panel/.MainActivity --ei tab 2 --es mode dsh
 ```
 
+### 7.4 虚拟屏
+1. 安装并启动 [Shizuku](https://shizuku.rikka.app/)，在「设置 → 扩展能力」授权；
+2. 打开「设置 → 虚拟屏 → 虚拟屏控制台」，选分辨率后点「开启虚拟屏」；
+3. 画面区可实时预览并点按；也可以直接对 DSH 说「用虚拟屏帮我操作 XX App」；
+4. 用完点「关闭虚拟屏」，系统设置会恢复原状。
+完整原理、工具调用与限制见 [docs/virtual-display.md](docs/virtual-display.md)。
+
 ---
 
 ## 8. 开发记录
@@ -272,6 +296,8 @@ adb shell am start -n com.workbuddy2api.panel/.MainActivity --ei tab 2 --es mode
 | 3.8.0 | 扩展中心：Termux 系统工具链（19 项）重定位安装（patchelf + 前缀替换） |
 | 3.9.3 | 修复 `spawn pnpm EACCES`（PATH 首位固定 `home/bin`） |
 | 3.10.0 | 内置 DSH 插件 `@workbuddy/dsh-mobile`：`wb_sh`/`wb_env`/`wb_shizuku`/`wb_notify` + Android 环境手册；`bash` 兜底到 mksh |
+| 3.12.0 | DSH 控制台全屏沉浸（隐藏顶栏/底部导航/系统栏，浮动退出按钮）；WebView 与轮询层掉帧优化 |
+| 3.13.0 | 安卓虚拟屏：Agent 在后台 overlay display 里启动/操作 App，不影响真机；控制台预览与点按、DSH/原生助手工具 |
 
 ---
 
@@ -282,7 +308,7 @@ cd android
 ./gradlew testDebugUnitTest lintDebug
 ```
 
-- 41 个单元测试：JSON 解码（含 11 个真机 live fixture）、URL 处理、格式化、网关 API、SSE 客户端（MockWebServer）。
+- 58 个单元测试：JSON 解码（含 11 个真机 live fixture）、URL 处理、格式化、网关 API、SSE 客户端（MockWebServer）。
 - `lintDebug` 0 error（存量 5 个 warning）。
 
 ---

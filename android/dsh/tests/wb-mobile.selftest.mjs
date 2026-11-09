@@ -3,7 +3,7 @@
  * wb-mobile 插件自检（纯 Node，不需要 Android 设备）。
  *
  * 校验三件事：
- *  1. 模块能被 ESM 加载，apply() 注册了 4 个工具与 1 段系统提示词；
+ *  1. 模块能被 ESM 加载，apply() 注册了 7 个工具与 1 段系统提示词；
  *  2. 每个工具的 parameters / output.schema 落在 DSH 允许的 JSON Schema 子集内
  *     （type 单值、只允许 properties/required/additionalProperties/items/enum/const + 注释键）；
  *  3. 用假的 ctx.subprocess 跑一次 wb_sh / wb_env，检查返回值满足 output.schema、渲染成文本。
@@ -128,11 +128,12 @@ check(Array.isArray(mod.inject) && mod.inject.includes("systemPrompt"), "plugin 
 mod.apply(ctx);
 
 console.log("已注册工具：" + [...tools.keys()].join(", "));
-check(tools.size === 4, "expected 4 tools, got " + tools.size);
+check(tools.size === 7, "expected 7 tools, got " + tools.size);
 check(sections.length === 1, "expected 1 prompt section, got " + sections.length);
 check(sections[0] && sections[0].interpolate === false, "prompt section must disable interpolation");
 check(sections[0] && sections[0].text.length > 800, "prompt section must carry the environment manual");
 check(sections[0] && sections[0].text.includes("wb_sh"), "manual must mention wb_sh");
+check(sections[0] && sections[0].text.includes("wb_vdisplay"), "manual must mention wb_vdisplay");
 check(sections[0] && !sections[0].text.includes("{{"), "manual must not contain interpolation markers");
 
 for (const [name, definition] of tools) {
@@ -170,9 +171,25 @@ const notify = tools.get("wb_notify");
 const notifyValue = await notify.execute({ text: "hi" }, {});
 validateValue(notify.output.schema, notifyValue, "wb_notify.value");
 
+// 虚拟屏三件套：没有桥 token 时必须 fail-closed，且 schema 合法。
+const vdisplay = tools.get("wb_vdisplay");
+const vdisplayValue = await vdisplay.execute({ action: "status", description: "check virtual display" }, {});
+validateValue(vdisplay.output.schema, vdisplayValue, "wb_vdisplay.value");
+check(vdisplayValue.ok === false, "wb_vdisplay must fail closed without a bridge token");
+
+const vscreen = tools.get("wb_vscreen");
+const vscreenValue = await vscreen.execute({ description: "capture" }, {});
+validateValue(vscreen.output.schema, vscreenValue, "wb_vscreen.value");
+check(vscreenValue.ok === false, "wb_vscreen must fail closed without a bridge token");
+
+const vinput = tools.get("wb_vinput");
+const vinputValue = await vinput.execute({ action: "tap", x: 10, y: 20, description: "tap" }, {});
+validateValue(vinput.output.schema, vinputValue, "wb_vinput.value");
+check(vinputValue.ok === false, "wb_vinput must fail closed without a bridge token");
+
 if (failures.length > 0) {
   console.error("\n自检失败（" + failures.length + "）：");
   for (const failure of failures) console.error(" - " + failure);
   process.exit(1);
 }
-console.log("\n自检通过：4 个工具 + 1 段环境手册，schema 与渲染均符合 DSH 约定。");
+console.log("\n自检通过：7 个工具 + 1 段环境手册，schema 与渲染均符合 DSH 约定。");

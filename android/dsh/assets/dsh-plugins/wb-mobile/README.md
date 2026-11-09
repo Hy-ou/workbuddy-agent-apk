@@ -26,12 +26,16 @@ WorkBuddy 一体化 APK 内置的 DSH 插件：给 Android 上的 DSH 内核补�
 | `wb_env` | 环境体检 | 一次给出可用/不可用命令、PATH、工具链清单、共享存储可写性、宿主桥与 Shizuku 状态 |
 | `wb_shizuku` | 以 uid 2000 执行 | 经宿主回环桥 `POST /shell` 转发到 `ShizukuShell.exec`；用于 `pm`/`input`/`screencap`/`settings`/`dumpsys` |
 | `wb_notify` | 系统通知 | 经回环桥 `POST /notify`，长任务结束时提醒用户 |
+| `wb_vdisplay` | 虚拟屏管理 | `POST /vdisplay`：status / start / stop / apps / launch；创建一块不影响真机的 overlay 显示 |
+| `wb_vscreen` | 虚拟屏截图 | `screencap -d <id> -p` → `cache/vdisplay/latest.png`，返回路径、分辨率与 displayId |
+| `wb_vinput` | 虚拟屏输入 | `input -d <id> tap/swipe/key/text`，坐标用虚拟屏像素；中文走剪贴板粘贴兜底 |
 
 ### 系统提示词段
 
 `workbuddy:android-environment`（order 1050，`interpolate: false`）—— 一段「Android 环境手册」：
 文件权限与路径约定、POSIX-only 语法、toybox 与 GNU 的差异、npm/pnpm 位置、工具链安装位置、
-Shizuku 提权边界、以及「报错先读 stderr、禁止原样重试」的排错约定。
+Shizuku 提权边界、虚拟屏的正确用法（何时用 / 坐标基准 / 结束 stop / 不碰支付），
+以及「报错先读 stderr、禁止原样重试」的排错约定。
 
 ## 实现约束（改代码前必读）
 
@@ -51,7 +55,7 @@ Shizuku 提权边界、以及「报错先读 stderr、禁止原样重试」的�
 node android/dsh/tests/wb-mobile.selftest.mjs
 ```
 
-不需要手机：用假 `ctx` 校验 4 个工具的 schema、渲染与失败路径。
+不需要手机：用假 `ctx` 校验 7 个工具的 schema、渲染与失败路径。
 真机上额外确认：
 
 ```bash

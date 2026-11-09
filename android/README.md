@@ -130,6 +130,25 @@ cd android && gradle test
 
 ## 变更记录
 
+- **3.13.0（2026-11-10）**：安卓虚拟屏。新增 `vdisplay/VirtualScreen`：经 Shizuku 创建系统级
+  overlay display（`settings put global overlay_display_devices`），支持 `screencap -d` 截图、
+  `input -d` 触摸/文字/按键、`am start --display` 启动应用到虚拟屏；关闭时恢复创建前的系统设置。
+  「设置 → 虚拟屏」新增控制台（开关、预设分辨率、实时画面 + 点按、文字注入、应用搜索启动、Shizuku 授权）。
+  DSH 插件新增 `wb_vdisplay` / `wb_vscreen` / `wb_vinput`，宿主桥新增 `POST /vdisplay`，环境手册加「虚拟屏」一节；
+  原生助手新增 `vdisplay` / `vlaunch` / `vscreen` / `vtap` / `vswipe` / `vtype` / `vkey`。
+  前置 Android 10+ 且 Shizuku 已授权；单实例应用/FLAG_SECURE/熄屏等限制见
+  [../docs/virtual-display.md](../docs/virtual-display.md)。版本 3.13.0 / versionCode 29。
+
+- **3.12.0（2026-11-10）**：DSH 控制台全屏沉浸 + 掉帧优化。进入「助手 → DSH 内核」默认隐藏 App 顶栏与
+  底部 6 Tab，并隐藏系统状态栏 / 手势条（边缘上滑临时唤出），WebView 占满整屏并按
+  `WindowInsets.displayCutout` 避让挖孔；顶部居中浮动「退出全屏」按钮回到 App 界面，顶栏新增
+  「全屏使用」按钮，返回键优先退出全屏；进出全屏不重建 WebView。性能方面重写视口修复脚本
+  （去掉 documentElement 上 `childList+subtree` 的全量 MutationObserver 与每 350ms 的样式全量重算，
+  改为 `ResizeObserver` + 高度去重、首帧单次换算）；WebView 改不透明底色、开 `offscreenPreRaster`、
+  关 overscroll；页面底色回调直改 View / 系统栏（不再触发整屏重组）；release 包 console 日志限流；
+  离开页面销毁 WebView；`Loader` 轮询等值不写状态、quiet 不拨动 `refreshing`、轮询绑定生命周期。
+  版本 3.12.0 / versionCode 28。详见 [../CHANGELOG.md](../CHANGELOG.md)。
+
 - **3.11.2（2026-11-06）**：修复「Web 面板导出的账号 JSON 在手机端导入失败」。面板导出的是
   与 `auths/workbuddy-*.json` 同构的嵌套形（`auth` / `account` / `device_token`），而网关
   `POST /panel/api/import/cockpit` 之前只解析 cockpit tools 的扁平数组：单账号对象直接 400

@@ -3,6 +3,8 @@ package com.workbuddy2api.panel.dsh
 import android.content.Context
 import com.workbuddy2api.panel.util.NotificationCenter
 import com.workbuddy2api.panel.util.ShizukuShell
+import com.workbuddy2api.panel.vdisplay.VirtualScreen
+import org.json.JSONArray
 import org.json.JSONObject
 import java.io.File
 import java.net.InetAddress
@@ -85,6 +87,136 @@ object LocalBridge {
             .toString()
     }
 
+    /**
+     * `POST /vdisplay`：虚拟屏（overlay display）的生命周期、应用启动、截图与输入注入。
+     *
+     * 动作：status / start / stop / apps / launch / shot / tap / swipe / key / text。
+     * 失败一律 200 + `ok:false + error`（插件侧 bridgePost 会转成可读错误，不抛断链路）。
+     */
+    private fun vdisplay(context: Context, body: String): Pair<Int, String> {
+        val req = runCatching { JSONObject(body) }.getOrNull()
+            ?: return 400 to JSONObject().put("ok", false).put("error", "invalid json").toString()
+        val action = req.optString("action").trim().lowercase().ifBlank { "status" }
+        fun fail(code: Int, message: String): Pair<Int, String> =
+            code to JSONObject().put("ok", false).put("error", message).toString()
+
+        return try {
+            when (action) {
+                "status" -> 200 to vdisplayState(VirtualScreen.refresh(context)).toString()
+                "start" -> {
+                    val width = req.optInt("width", 720).coerceIn(240, 2560)
+                    val height = req.optInt("height", 1280).coerceIn(240, 2560)
+                    val dpi = req.optInt("dpi", 320).coerceIn(120, 640)
+                    val st = kotlinx.coroutines.runBlocking { VirtualScreen.start(context, width, height, dpi) }
+                    200 to vdisplayState(st).toString()
+                }
+                "stop" -> {
+                    val st = kotlinx.coroutines.runBlocking { VirtualScreen.stop(context) }
+                    200 to vdisplayState(st).toString()
+                }
+                "apps" -> {
+                    val list = VirtualScreen.apps(context).take(400)
+                    val array = JSONArray()
+                    for (app in list) {
+                        array.put(JSONObject().put("package", app.packageName).put("label", app.label))
+                    }
+                    200 to JSONObject().put("ok", true).put("apps", array).toString()
+                }
+                "launch" -> {
+                    val pkg = req.optString("package").trim()
+                    if (pkg.isBlank()) return fail(400, "package required")
+                    val r = kotlinx.coroutines.runBlocking { VirtualScreen.launch(context, pkg) }
+                    if (r.isSuccess) {
+                        200 to JSONObject().put("ok", true).put("message", r.getOrThrow()).toString()
+                    } else {
+                        fail(200, r.exceptionOrNull()?.message ?: "启动失败")
+                    }
+                }
+                "shot" -> {
+                    val shot = kotlinx.coroutines.runBlocking { VirtualScreen.shot(context) }
+                        ?: return fail(200, "截图失败：虚拟屏未开启、Shizuku 未授权，或 screencap 不支持 -d")
+                    200 to JSONObject()
+                        .put("ok", true)
+                        .put("path", shot.path)
+                        .put("width", shot.width)
+                        .put("height", shot.height)
+                        .put("display", vdisplayDisplay(VirtualScreen.info(context)))
+                        .toString()
+                }
+                "tap", "swipe", "key", "text" -> {
+                    val r = kotlinx.coroutines.runBlocking {
+                        when (action) {
+                            "tap" -> VirtualScreen.tap(context, req.optInt("x"), req.optInt("y"))
+                            "swipe" -> VirtualScreen.swipe(
+                                context,
+                                req.optInt("x1"),
+                                req.optInt("y1"),
+                                req.optInt("x2"),
+                                req.optInt("y2"),
+                                req.optInt("durationMs", 300),
+                            )
+                            "key" -> VirtualScreen.key(context, req.optInt("code", 4))
+                            else -> VirtualScreen.text(context, req.optString("text"))
+                        }
+                    }
+                    if (r.isSuccess) {
+                        200 to JSONObject().put("ok", true).toString()
+                    } else {
+                        fail(200, r.exceptionOrNull()?.message ?: "输入注入失败")
+                    }
+                }
+                else -> fail(400, "unknown action: $action")
+            }
+        } catch (e: Exception) {
+            500 to JSONObject()
+                .put("ok", false)
+                .put("error", e.message?.takeIf { it.isNotBlank() } ?: e.javaClass.simpleName)
+                .toString()
+        }
+    }
+
+    private fun vdisplayState(st: VirtualScreen.State): JSONObject {
+        val json = JSONObject()
+            .put("supported", VirtualScreen.supported())
+            .put(
+                "shizuku",
+                JSONObject()
+                    .put("available", VirtualScreen.shizukuAvailable())
+                    .put("granted", VirtualScreen.shizukuGranted()),
+            )
+            .put(
+                "state",
+                when (st) {
+                    is VirtualScreen.State.Unsupported -> "unsupported"
+                    is VirtualScreen.State.Off -> "off"
+                    is VirtualScreen.State.Starting -> "starting"
+                    is VirtualScreen.State.On -> "on"
+                    is VirtualScreen.State.Failed -> "failed"
+                },
+            )
+        val info = (st as? VirtualScreen.State.On)?.info
+        if (info != null) json.put("display", vdisplayDisplay(info))
+        val error = when {
+            st is VirtualScreen.State.Failed -> st.message
+            st is VirtualScreen.State.Unsupported -> "需要 Android 10+（API 29）"
+            !VirtualScreen.shizukuGranted() -> "Shizuku 未安装或未授权"
+            else -> ""
+        }
+        json.put("ok", error.isEmpty())
+        if (error.isNotEmpty()) json.put("error", error)
+        return json
+    }
+
+    private fun vdisplayDisplay(info: VirtualScreen.Info?): JSONObject? = info?.let {
+        JSONObject()
+            .put("id", it.displayId)
+            .put("name", it.name)
+            .put("width", it.width)
+            .put("height", it.height)
+            .put("density", it.densityDpi)
+            .put("spec", it.spec)
+    }
+
     private fun handle(context: Context, token: String, client: Socket) {
         client.use { sock ->
             sock.soTimeout = 5000
@@ -149,6 +281,7 @@ object LocalBridge {
                     }
                 }
                 path == "/shell" -> shell(body)
+                path == "/vdisplay" -> vdisplay(context, body)
                 path == "/health" -> {
                     val available = runCatching { ShizukuShell.available() }.getOrDefault(false)
                     val granted = runCatching { ShizukuShell.granted() }.getOrDefault(false)

@@ -97,6 +97,13 @@ libdshnode.so --expose-internals dshroot/lib/node_modules/@deepseek-ai/dsh/lib/b
 - 等 WebView **有实际尺寸**后再 `loadUrl`，避免 0×0 时初始化渲染视口；
 - 放行 `about/data/blob/javascript` 协议，实现 `onShowFileChooser`（附件），
   并注入视口修复脚本（见 [troubleshooting.md](troubleshooting.md#4-dsh-控制台按钮点击无反应)）。
+- **全屏沉浸（3.12.0）**：DSH Tab 默认隐藏 App 顶栏 / 底部导航与系统状态栏、手势条
+  （`WindowInsetsControllerCompat.hide(systemBars)` + `BEHAVIOR_SHOW_TRANSIENT_BARS_BY_SWIPE`），
+  WebView 按 `WindowInsets.displayCutout` 避让挖孔；顶部居中的「退出全屏」浮层恢复 App 界面，
+  顶栏「全屏使用」按钮再次进入；返回键先退出全屏。进出全屏只改变量约束，不重建 WebView。
+- **帧率约束**：视口修复只在视口尺寸变化时改高度（`ResizeObserver`），vh→px 全量换算仅首帧一次；
+  WebView 用不透明底色 + `offscreenPreRaster`；页面底色回调直接改 View / 系统栏，不经 Compose 状态；
+  release 包前端 console 日志按 300ms 限流；离开页面 `removeView + destroy`。
 
 ### 4.5 内置 DSH 插件 `@workbuddy/dsh-mobile`
 
@@ -125,6 +132,31 @@ dsh-home/dshhome/cordis.patch.yml 的 insert 行（id: wb-mobile）
 
 设计与取舍见 [mobile-agent-plugin.md](mobile-agent-plugin.md)；离线自检：
 `node android/dsh/tests/wb-mobile.selftest.mjs`。
+
+### 4.6 虚拟屏（`vdisplay/VirtualScreen.kt`）
+
+给 Agent 一块不对应物理屏幕的 Android 显示，用户继续使用真机：
+
+```
+settings put global overlay_display_devices "720x1280/320"   ← ShizukuShell（uid 2000）
+        │ DisplayManager 轮询 / screencap 反查 displayId
+        ▼
+am start --display <id> -n pkg/act     启动目标 App 到虚拟屏
+input -d <id> tap|swipe|text|keyevent  注入触摸/文字（不影响真机焦点）
+screencap -d <id> -p                   截图 → cache/vdisplay/latest.png
+settings delete global overlay_display_devices   关闭并恢复用户原值
+```
+
+- 能力层 `VirtualScreen` 暴露 `state: StateFlow`、`start/stop/refresh`、`capture/shot`、
+  `tap/swipe/key/text`、`apps/launch`；所有命令经 `ShizukuShell.exec/execBytes` 执行。
+- displayId 优先用 `DisplayManager.getDisplays()` 里名字含 `Overlay` 的显示；
+  定制 ROM 不暴露时逐个 `screencap -d N` 用 PNG 尺寸反查，并把结果缓存到 SharedPreferences。
+- 创建前的 `overlay_display_devices` 原值写入 prefs，关闭时原样恢复，避免污染开发者选项。
+- UI：`ui/vdisplay/VirtualScreenScreen.kt`（设置 → 虚拟屏）；DSH 插件工具
+  `wb_vdisplay/wb_vscreen/wb_vinput` 经宿主桥 `POST /vdisplay` 调用；
+  原生助手 `MobileTools` 直接调用同一对象。
+- 约束：Android 10+ 且 Shizuku 授权；`FLAG_SECURE` 页面截图黑屏；单实例 App 会在真机/虚拟屏之间搬窗口。
+  详见 [virtual-display.md](virtual-display.md)。
 
 ---
 

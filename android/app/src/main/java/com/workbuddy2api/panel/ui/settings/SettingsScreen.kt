@@ -69,6 +69,7 @@ fun SettingsScreen(
     onOpenPackages: () -> Unit,
     onOpenProbes: () -> Unit,
     onOpenVouchers: () -> Unit,
+    onOpenVirtualScreen: () -> Unit,
     onDisconnect: () -> Unit,
     onThemeChange: (String) -> Unit,
     onRefreshChange: (Int) -> Unit,
@@ -181,6 +182,15 @@ fun SettingsScreen(
             // ── 扩展能力 ────────────────────────────────────────────
             SectionHeader(title = "扩展能力", subtitle = "AI 通知 / Shizuku 特权 / 工具链 / 社区插件")
             ExtensionsCard()
+
+            Spacer(Modifier.height(WbDimens.gap))
+            // ── 虚拟屏 ──────────────────────────────────────────────
+            SectionHeader(title = "虚拟屏", subtitle = "Agent 在后台显示里操作 App，不影响你真机使用")
+            NavCard(
+                title = "虚拟屏控制台",
+                subtitle = "开启/关闭、实时画面、点按与文字输入、应用启动",
+                onClick = onOpenVirtualScreen,
+            )
 
             Spacer(Modifier.height(WbDimens.gap))
             // ── DSH 工具 ────────────────────────────────────────────

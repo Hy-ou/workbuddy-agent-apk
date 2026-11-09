@@ -48,10 +48,7 @@ import com.workbuddy2api.panel.data.Session
 import com.workbuddy2api.panel.data.WbRepository
 import com.workbuddy2api.panel.ui.accounts.AccountsScreen
 import com.workbuddy2api.panel.dsh.DshManager
-import com.workbuddy2api.panel.ui.components.FilterChips
 import com.workbuddy2api.panel.ui.dsh.DshScreen
-import androidx.compose.runtime.saveable.rememberSaveable
-import androidx.compose.runtime.mutableIntStateOf
 import com.workbuddy2api.panel.ui.assistant.AssistantScreen
 import com.workbuddy2api.panel.ui.components.LocalSnackbar
 import com.workbuddy2api.panel.ui.components.WbButton
@@ -65,6 +62,7 @@ import com.workbuddy2api.panel.ui.settings.UsageScreen
 import com.workbuddy2api.panel.ui.settings.VouchersScreen
 import com.workbuddy2api.panel.ui.tasks.TasksScreen
 import com.workbuddy2api.panel.ui.theme.LocalWbColors
+import com.workbuddy2api.panel.ui.vdisplay.VirtualScreenScreen
 
 private data class TabItem(val label: String, val icon: ImageVector)
 
@@ -78,7 +76,7 @@ private val tabs = listOf(
 )
 
 /** 二级页面路由（设置里的功能页）。 */
-private enum class Route { Main, Config, Usage, Packages, Probes, Vouchers }
+private enum class Route { Main, Config, Usage, Packages, Probes, Vouchers, VirtualScreen }
 
 /**
  * App 主壳：底部 6 Tab（总览 / 账号 / 助手 / 任务 / 日志 / 设置）+ 二级页面。
@@ -99,17 +97,27 @@ fun AppShell(vm: AppViewModel, session: Session, repo: WbRepository, initialTab:
     var route by rememberSaveable { mutableStateOf(Route.Main) }
     var showGatewayLogs by remember { mutableStateOf(false) }
 
-    val agentClient by vm.agentClient.collectAsStateWithLifecycle()
-    val gatewayStatus by vm.gatewayStatus.collectAsStateWithLifecycle()
+    // 引擎在「设置 → 助手引擎」里切换；DSH 页默认全屏沉浸：隐藏顶栏与底部导航，
+    // 只留顶部一个「退出全屏」按钮回到 App 界面。
+    val engine = initialMode.ifBlank { session.assistantMode }
+    val dshActive = tab == 2 && engine == "dsh"
+    var dshImmersive by rememberSaveable { mutableStateOf(engine == "dsh") }
+    LaunchedEffect(engine) {
+        // 切到 DSH 引擎时重新进入全屏；切回原生助手则恢复正常布局。
+        if (engine == "dsh") dshImmersive = true
+    }
+    val hideChrome = dshActive && dshImmersive
 
     BackHandler(enabled = route != Route.Main) { route = Route.Main }
+    // 全屏时先退出全屏，再让系统处理返回（避免一按返回就直接退出 App）。
+    BackHandler(enabled = hideChrome) { dshImmersive = false }
 
     Scaffold(
         modifier = Modifier.fillMaxSize(),
         containerColor = wb.bg,
         snackbarHost = { SnackbarHost(snackbar) },
         bottomBar = {
-            if (route == Route.Main) {
+            if (route == Route.Main && !hideChrome) {
                 NavigationBar(containerColor = wb.surface, tonalElevation = 0.dp) {
                     tabs.forEachIndexed { index, item ->
                         NavigationBarItem(
@@ -134,7 +142,7 @@ fun AppShell(vm: AppViewModel, session: Session, repo: WbRepository, initialTab:
             Box(
                 Modifier
                     .fillMaxSize()
-                    .padding(bottom = padding.calculateBottomPadding()),
+                    .padding(bottom = if (hideChrome) 0.dp else padding.calculateBottomPadding()),
             ) {
                 when (route) {
                     Route.Main -> when (tab) {
@@ -146,17 +154,17 @@ fun AppShell(vm: AppViewModel, session: Session, repo: WbRepository, initialTab:
                         1 -> AccountsScreen(repo)
                         2 -> {
                             // 引擎切换放在「设置 → 助手引擎」；intent extra mode 仅用于调试直达。
-                            val engine = initialMode.ifBlank { session.assistantMode }
                             if (engine == "dsh") {
                                 val dsh = remember { DshManager.get(vm.getApplication()) }
-                                DshScreen(manager = dsh, gatewayApiKey = session.apiKey)
+                                DshScreen(
+                                    manager = dsh,
+                                    gatewayApiKey = session.apiKey,
+                                    immersive = dshImmersive,
+                                    onImmersiveChange = { dshImmersive = it },
+                                )
                             } else {
-                                AssistantScreen(
-                                    client = agentClient,
-                                    store = vm.agentStore,
-                                    gatewayStatus = gatewayStatus,
-                                    onStartGateway = { vm.startLocalGateway() },
-                                    onRestartGateway = { vm.restartLocalGateway() },
+                                AssistantBranch(
+                                    vm = vm,
                                     onOpenAccounts = { tab = 1 },
                                     onOpenLogs = { tab = 4 },
                                     onOpenGatewayLogs = { showGatewayLogs = true },
@@ -173,6 +181,7 @@ fun AppShell(vm: AppViewModel, session: Session, repo: WbRepository, initialTab:
                             onOpenPackages = { route = Route.Packages },
                             onOpenProbes = { route = Route.Probes },
                             onOpenVouchers = { route = Route.Vouchers },
+                            onOpenVirtualScreen = { route = Route.VirtualScreen },
                             onDisconnect = { vm.disconnect() },
                             onThemeChange = { vm.setTheme(it) },
                             onRefreshChange = { vm.setRefresh(it) },
@@ -184,6 +193,7 @@ fun AppShell(vm: AppViewModel, session: Session, repo: WbRepository, initialTab:
                     Route.Packages -> PackagesScreen(repo) { route = Route.Main }
                     Route.Probes -> ProbesScreen(repo) { route = Route.Main }
                     Route.Vouchers -> VouchersScreen(repo) { route = Route.Main }
+                    Route.VirtualScreen -> VirtualScreenScreen { route = Route.Main }
                 }
             }
         }
@@ -198,6 +208,29 @@ fun AppShell(vm: AppViewModel, session: Session, repo: WbRepository, initialTab:
             GatewayLogSheet(vm, onClose = { showGatewayLogs = false })
         }
     }
+}
+
+@Composable
+private fun AssistantBranch(
+    vm: AppViewModel,
+    onOpenAccounts: () -> Unit,
+    onOpenLogs: () -> Unit,
+    onOpenGatewayLogs: () -> Unit,
+) {
+    // 只在这一支订阅：网关状态/客户端变化原先把整个 AppShell（连同 DSH 的 WebView）
+    // 一起重组，是切页后偶发掉帧的来源之一。
+    val agentClient by vm.agentClient.collectAsStateWithLifecycle()
+    val gatewayStatus by vm.gatewayStatus.collectAsStateWithLifecycle()
+    AssistantScreen(
+        client = agentClient,
+        store = vm.agentStore,
+        gatewayStatus = gatewayStatus,
+        onStartGateway = { vm.startLocalGateway() },
+        onRestartGateway = { vm.restartLocalGateway() },
+        onOpenAccounts = onOpenAccounts,
+        onOpenLogs = onOpenLogs,
+        onOpenGatewayLogs = onOpenGatewayLogs,
+    )
 }
 
 @Composable

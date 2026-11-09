@@ -480,6 +480,188 @@ function notifyTool() {
   };
 }
 
+// ───────────────────────────── 虚拟屏（overlay display） ─────────────────────────────
+
+/**
+ * 虚拟屏：系统里多出来一块不对应物理屏幕的显示（开发者选项「模拟辅助显示」同一机制）。
+ * App 启动到那块屏上，Agent 用 input -d / screencap -d 操作，完全不影响用户的真实屏幕。
+ * 创建/销毁、找 displayId、截图落盘都由宿主（LocalBridge /vdisplay）完成，这里只做工具封装。
+ */
+function vdisplayTool() {
+  return {
+    name: "wb_vdisplay",
+    description:
+      "Manage an Android off-screen virtual display so apps can be launched and driven without touching the user's real screen. " +
+      "Actions: status | start | stop | apps | launch. Requires Shizuku (shell uid).",
+    parameters: {
+      type: "object",
+      additionalProperties: false,
+      required: ["action", "description"],
+      properties: {
+        action: {
+          type: "string",
+          enum: ["status", "start", "stop", "apps", "launch"],
+          description: "status: query; start: create (default 720x1280/320); stop: restore the user's display setting; apps: list launchable packages; launch: start a package on the virtual display.",
+        },
+        package: {
+          type: "string",
+          description: "Package name, required for action=launch (take it from action=apps).",
+        },
+        width: { type: "integer", description: "Virtual display width in px (default 720, max 2560)." },
+        height: { type: "integer", description: "Virtual display height in px (default 1280, max 2560)." },
+        dpi: { type: "integer", description: "Virtual display density dpi (default 320)." },
+        description: { type: "string", description: "Short active-voice summary of the call, shown in the UI (5-10 words)." },
+      },
+    },
+    output: {
+      schema: {
+        type: "object",
+        additionalProperties: false,
+        required: ["ok", "output", "error"],
+        properties: {
+          ok: { type: "boolean" },
+          output: { type: "string" },
+          error: { type: "string" },
+        },
+      },
+      render: function (_args, value) {
+        if (!value.ok) return [{ type: "text", text: "[virtual display unavailable] " + value.error }];
+        return [{ type: "text", text: value.output }];
+      },
+    },
+    async execute(args) {
+      const body = { action: args.action };
+      if (typeof args.package === "string" && args.package.length > 0) body.package = args.package;
+      if (Number.isFinite(args.width)) body.width = Math.round(args.width);
+      if (Number.isFinite(args.height)) body.height = Math.round(args.height);
+      if (Number.isFinite(args.dpi)) body.dpi = Math.round(args.dpi);
+      try {
+        const json = await bridgePost("/vdisplay", body, 60000);
+        return { ok: true, error: "", output: JSON.stringify(json) };
+      } catch (error) {
+        return { ok: false, error: errText(error), output: "" };
+      }
+    },
+  };
+}
+
+function vscreenTool() {
+  return {
+    name: "wb_vscreen",
+    description:
+      "Capture the virtual display's current frame to a PNG in the app cache and return its path. " +
+      "Use it to inspect what the virtual screen shows before tapping (open the path with read if the model supports images).",
+    parameters: {
+      type: "object",
+      additionalProperties: false,
+      required: ["description"],
+      properties: {
+        description: { type: "string", description: "Short active-voice summary of the call (5-10 words)." },
+      },
+    },
+    output: {
+      schema: {
+        type: "object",
+        additionalProperties: false,
+        required: ["ok", "path", "width", "height", "displayId", "output", "error"],
+        properties: {
+          ok: { type: "boolean" },
+          path: { type: "string" },
+          width: { type: "integer" },
+          height: { type: "integer" },
+          displayId: { type: "integer" },
+          output: { type: "string" },
+          error: { type: "string" },
+        },
+      },
+      render: function (_args, value) {
+        if (!value.ok) return [{ type: "text", text: "[virtual screen capture failed] " + value.error }];
+        return [{
+          type: "text",
+          text: "virtual screen capture: " + value.path + " (" + value.width + "x" + value.height +
+            ", displayId=" + value.displayId + ")\n" + value.output,
+        }];
+      },
+    },
+    async execute() {
+      try {
+        const json = await bridgePost("/vdisplay", { action: "shot" }, 30000);
+        const display = json && json.display ? json.display : {};
+        return {
+          ok: true,
+          path: typeof json.path === "string" ? json.path : "",
+          width: typeof json.width === "number" ? json.width : 0,
+          height: typeof json.height === "number" ? json.height : 0,
+          displayId: typeof display.id === "number" ? display.id : 0,
+          output: JSON.stringify(json),
+          error: "",
+        };
+      } catch (error) {
+        return { ok: false, path: "", width: 0, height: 0, displayId: 0, output: "", error: errText(error) };
+      }
+    },
+  };
+}
+
+function vinputTool() {
+  return {
+    name: "wb_vinput",
+    description:
+      "Inject touch/text/key events into the virtual display (does not move the user's real screen cursor). " +
+      "Coordinates use the virtual display's pixels, as returned by wb_vdisplay status / wb_vscreen.",
+    parameters: {
+      type: "object",
+      additionalProperties: false,
+      required: ["action", "description"],
+      properties: {
+        action: { type: "string", enum: ["tap", "swipe", "key", "text"], description: "Input kind." },
+        x: { type: "integer", description: "Tap X (px)." },
+        y: { type: "integer", description: "Tap Y (px)." },
+        x1: { type: "integer", description: "Swipe start X." },
+        y1: { type: "integer", description: "Swipe start Y." },
+        x2: { type: "integer", description: "Swipe end X." },
+        y2: { type: "integer", description: "Swipe end Y." },
+        durationMs: { type: "integer", description: "Swipe duration in ms (default 300)." },
+        code: { type: "integer", description: "Android keycode for action=key: 4 BACK, 3 HOME, 66 ENTER, 187 RECENTS." },
+        text: { type: "string", description: "Text for action=text (ASCII direct; CJK best-effort via clipboard paste)." },
+        description: { type: "string", description: "Short active-voice summary of the call (5-10 words)." },
+      },
+    },
+    output: {
+      schema: {
+        type: "object",
+        additionalProperties: false,
+        required: ["ok", "output", "error"],
+        properties: {
+          ok: { type: "boolean" },
+          output: { type: "string" },
+          error: { type: "string" },
+        },
+      },
+      render: function (args, value) {
+        if (!value.ok) return [{ type: "text", text: "[virtual input failed] " + value.error }];
+        return [{ type: "text", text: "virtual input ok: " + args.action + " " + value.output }];
+      },
+    },
+    async execute(args) {
+      const body = { action: args.action };
+      if (args.action === "tap") { body.x = args.x; body.y = args.y; }
+      if (args.action === "swipe") {
+        body.x1 = args.x1; body.y1 = args.y1; body.x2 = args.x2; body.y2 = args.y2;
+        if (Number.isFinite(args.durationMs)) body.durationMs = Math.round(args.durationMs);
+      }
+      if (args.action === "key") body.code = Number.isFinite(args.code) ? Math.round(args.code) : 4;
+      if (args.action === "text") body.text = typeof args.text === "string" ? args.text : "";
+      try {
+        const json = await bridgePost("/vdisplay", body, 30000);
+        return { ok: true, output: JSON.stringify(json), error: "" };
+      } catch (error) {
+        return { ok: false, output: "", error: errText(error) };
+      }
+    },
+  };
+}
+
 // ───────────────────────────── 环境手册（系统提示词段） ─────────────────────────────
 
 function environmentManual() {
@@ -499,6 +681,7 @@ function environmentManual() {
     "    const r = await tools.wb_sh({ command: \"ls /sdcard/Download | head\", description: \"list downloads\" });",
     "    console.log(r.exitCode, r.stdout, r.stderr);",
     "    const p = await tools.wb_shizuku({ command: \"pm list packages -3\", description: \"list user apps\" });",
+    "    const vd = await tools.wb_vdisplay({ action: \"status\", description: \"check virtual display\" });",
     "    await tools.wb_notify({ title: \"WorkBuddy\", text: \"任务完成\" });",
     "- run_code 自己的沙箱：cwd 是会话工作区（常见 /data/data/<包名>/files/<目录>），env 里没有 PATH / HOME；",
     "  fs / path 可以正常用（读写手机文件没问题），但沙箱里不能执行任何命令 —— 真正带 PATH（home/bin、toolchain）的环境只在 tools.wb_sh / tools.bash 里。",
@@ -529,6 +712,19 @@ function environmentManual() {
     "- 它经宿主回环桥（127.0.0.1:7865）转发，要求用户已安装并授权 Shizuku；返回 shizuku unavailable 时降级到 tools.wb_sh 或无障碍能力，不要反复重试。",
     "- 真实身份因设备而异：普通设备是 shell（uid 2000），KernelSU/Magisk 环境下是 root。第一次使用先执行 id -un 确认，再决定是否执行破坏性操作；删除系统文件、卸载系统应用这类动作必须先得到用户明确同意。",
     "",
+    "### 虚拟屏（不打扰用户当前屏幕，优先用它）",
+    "- 默认策略：需要点击/输入 App 界面时，优先在虚拟屏里做，用户仍可正常使用真机；只有用户明确要求「操作我现在这个屏幕」时才直接动真机。",
+    "- 用户说「别动我手机 / 后台帮我操作 / 用虚拟屏」时，必须先 start 虚拟屏，再启动目标 App 操作。",
+    "- 创建：先 await tools.wb_vdisplay({ action: \"status\" }) 看是否已经 on；未开启再 { action: \"start\" }。默认 720x1280/320，可传 width/height/dpi；返回 JSON 里的 display.id / display.width / display.height 是后续坐标基准。",
+    "- 状态与关闭：{ action: \"status\" }、{ action: \"stop\" }。stop 会把系统「模拟辅助显示」设置恢复成创建前的值；任务结束先问用户要不要关。",
+    "- 列出可启动应用：{ action: \"apps\" }（返回 package + label，最多 400 个）。启动：{ action: \"launch\", package: \"com.xxx\" }。",
+    "- 看画面：await tools.wb_vscreen({ description: \"capture virtual screen\" }) → path（PNG，应用缓存 vdisplay/latest.png）。如果模型支持图像，用 read 打开这个路径再决定坐标；不支持就按用户描述/已知布局点。",
+    "- 操作：await tools.wb_vinput({ action: \"tap\", x: 360, y: 640, description: \"tap login\" })；swipe 传 x1/y1/x2/y2/durationMs；key 传 code（4 返回、3 桌面、66 回车、187 最近任务）；text 传 text。",
+    "- 文字：ASCII 走 input text 最可靠；中文/emoji 走「剪贴板 + KEYCODE_PASTE」兜底，个别 App 会拦截粘贴，失败就换成点击候选词/键盘输入。",
+    "- 失败语义：返回 shizuku unavailable → 让用户到「设置 → 扩展能力」授权 Shizuku（创建虚拟屏、输入注入都要求 uid 2000）；返回 needs Android 10+ → 这台机器不支持该能力。",
+    "- 虚拟屏不可用（Shizuku 未授权 / Android 10 以下）时，不要卡住：告诉用户原因，并询问是否改用真机操作（无障碍通道）。",
+    "- 注意：虚拟屏与真机是同一套应用数据（同一个 App、同一个账号）。单实例应用可能把已有窗口从真机移到虚拟屏，动手前先提醒用户；不要用虚拟屏做支付、转账等敏感操作。",
+    "",
     "### 其它",
     "- 通知用户：tools.wb_notify（标题 + 正文）；长任务完成或需要用户确认时用。",
     "- 批量/复杂处理：就在 run_code 里写 TypeScript 组合调用（Promise.all 并发多个 tools.wb_sh），避免多轮往返。",
@@ -545,6 +741,9 @@ export function apply(ctx) {
   ctx.tools.register(envTool());
   ctx.tools.register(shizukuTool());
   ctx.tools.register(notifyTool());
+  ctx.tools.register(vdisplayTool());
+  ctx.tools.register(vscreenTool());
+  ctx.tools.register(vinputTool());
   try {
     ctx.systemPrompt.section({
       name: "workbuddy:android-environment",

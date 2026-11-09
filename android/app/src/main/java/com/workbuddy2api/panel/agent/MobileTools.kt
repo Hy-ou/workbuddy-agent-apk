@@ -4,6 +4,7 @@ import android.content.Context
 import android.content.Intent
 import android.provider.Settings
 import com.workbuddy2api.panel.data.WbJson
+import com.workbuddy2api.panel.vdisplay.VirtualScreen
 import kotlinx.coroutines.CancellationException
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.withContext
@@ -47,6 +48,18 @@ object MobileTools {
 6. {"tool":"notify","title":"任务完成","text":"已为你整理好 3 个文件"} —— 发一条通知栏提醒（任务完成或需要用户关注时使用）。
 7. {"tool":"shell","cmd":"pm list packages | head"} —— 以 shell 权限执行系统命令（需用户安装并授权 Shizuku；可装应用、截屏、模拟输入、改设置）。
 
+【虚拟屏（不打扰用户当前屏幕）】
+需要点击/输入 App 界面时，默认先开虚拟屏在后台操作，真机留给用户；只有用户明确说「操作我现在这个屏幕」才用真机工具。
+8. {"tool":"vdisplay","action":"start"} —— 创建虚拟屏（可带 width/height/dpi，默认 720x1280/320）；action 取 start / stop / status。
+9. {"tool":"vlaunch","package":"com.tencent.mm"} —— 在虚拟屏启动一个已安装的 App（包名可先用 shell 的 pm list packages 查）。
+10. {"tool":"vscreen"} —— 截取虚拟屏当前画面，返回 PNG 路径与分辨率。
+11. {"tool":"vtap","x":360,"y":640} —— 在虚拟屏点击坐标（坐标以虚拟屏分辨率为准）。
+12. {"tool":"vtype","text":"你好"} —— 在虚拟屏当前输入框输入文字（中文走剪贴板粘贴，个别 App 可能不生效）。
+13. {"tool":"vswipe","x1":360,"y1":1000,"x2":360,"y2":400} / {"tool":"vkey","code":"back"} —— 滑动 / 按键（back/home/enter/recents/menu）。
+虚拟屏与真机共用同一套应用数据；单实例 App 可能把窗口从真机移到虚拟屏，操作前先告诉用户。
+虚拟屏不可用时（Shizuku 未授权 / Android 10 以下）改用真机工具（screen/tap/…），不要卡住。
+任务结束后询问用户是否 {"tool":"vdisplay","action":"stop"} 关闭虚拟屏。
+
 【规则】
 - 每次只输出一个工具调用，等系统返回 {"ok":true,"result":"..."} 或 {"ok":false,"error":"..."} 后再决定下一步。
 - 失败时先 screen 重新确认界面，不要盲目重复同样的调用；连续失败两次就停下来询问用户。
@@ -56,6 +69,12 @@ object MobileTools {
 
     /** 无障碍服务是否已连接（未授权时为 false）。 */
     fun isReady(context: Context): Boolean = WbAccessibilityService.instance != null
+
+    /**
+     * 工具模式是否有任一可用能力：
+     * 无障碍（真机界面操作）或 Shizuku（虚拟屏、系统命令）。
+     */
+    fun toolsAvailable(context: Context): Boolean = isReady(context) || VirtualScreen.ready()
 
     /** 跳转系统「无障碍」设置页，让用户手动开启本应用的服务（失败时退到系统设置首页）。 */
     fun openSettings(context: Context) {
@@ -94,6 +113,13 @@ object MobileTools {
         when (tool) {
             "notify", "通知" -> return@withContext notify(context, command)
             "shell", "命令" -> return@withContext shell(command)
+            "vdisplay", "虚拟屏" -> return@withContext vdisplay(context, command)
+            "vlaunch", "虚拟启动" -> return@withContext vlaunch(context, command)
+            "vscreen", "虚拟截图" -> return@withContext vscreen(context)
+            "vtap", "虚拟点击" -> return@withContext vtap(context, command)
+            "vswipe", "虚拟滑动" -> return@withContext vswipe(context, command)
+            "vtype", "虚拟输入" -> return@withContext vtype(context, command)
+            "vkey", "虚拟按键" -> return@withContext vkey(context, command)
         }
         if (!isReady(context)) {
             return@withContext failure("无障碍服务未连接：请到「设置 → 无障碍」里开启 WorkBuddy 助手")
@@ -134,6 +160,107 @@ object MobileTools {
         } catch (e: Exception) {
             failure(e.message ?: "Shizuku 执行失败")
         }
+    }
+
+    // ── 虚拟屏工具（不依赖无障碍，只要求 Shizuku） ─────────────────────
+
+    private suspend fun vdisplay(context: Context, command: JsonObject): String {
+        val action = command.string("action")?.lowercase() ?: "status"
+        return when (action) {
+            "start", "开启", "创建" -> {
+                val w = (command.int("width") ?: command.int("w") ?: 720).coerceIn(240, 2560)
+                val h = (command.int("height") ?: command.int("h") ?: 1280).coerceIn(240, 2560)
+                val dpi = (command.int("dpi") ?: 320).coerceIn(120, 640)
+                when (val st = VirtualScreen.start(context, w, h, dpi)) {
+                    is VirtualScreen.State.On -> success(
+                        "虚拟屏已开启：displayId=${st.info.displayId}，" +
+                            "${st.info.width}x${st.info.height}@${st.info.densityDpi}dpi",
+                    )
+                    is VirtualScreen.State.Failed -> failure(st.message)
+                    is VirtualScreen.State.Unsupported -> failure("这台设备不支持虚拟屏（需要 Android 10+）")
+                    else -> failure("虚拟屏启动失败")
+                }
+            }
+            "stop", "关闭" -> when (val st = VirtualScreen.stop(context)) {
+                is VirtualScreen.State.Off -> success("虚拟屏已关闭，系统显示设置已恢复")
+                is VirtualScreen.State.Failed -> failure(st.message)
+                else -> failure("关闭虚拟屏失败")
+            }
+            else -> when (val st = VirtualScreen.refresh(context)) {
+                is VirtualScreen.State.On -> success(
+                    "虚拟屏运行中：displayId=${st.info.displayId}，" +
+                        "${st.info.width}x${st.info.height}@${st.info.densityDpi}dpi",
+                )
+                is VirtualScreen.State.Failed -> failure(st.message)
+                is VirtualScreen.State.Unsupported -> failure("这台设备不支持虚拟屏（需要 Android 10+）")
+                else -> failure("虚拟屏未开启：先调用 {\"tool\":\"vdisplay\",\"action\":\"start\"}")
+            }
+        }
+    }
+
+    private suspend fun vlaunch(context: Context, command: JsonObject): String {
+        val pkg = command.string("package") ?: command.string("pkg") ?: command.string("app")
+            ?: return failure("vlaunch 需要 package（应用包名）")
+        VirtualScreen.refresh(context)
+        return VirtualScreen.launch(context, pkg).fold(
+            { success(it) },
+            { failure(it.message ?: "启动失败") },
+        )
+    }
+
+    private suspend fun vscreen(context: Context): String {
+        VirtualScreen.refresh(context)
+        val shot = VirtualScreen.shot(context)
+            ?: return failure("虚拟屏截图失败：确认虚拟屏已开启且 Shizuku 已授权")
+        return success("虚拟屏截图：${shot.path}（${shot.width}x${shot.height}）")
+    }
+
+    private suspend fun vtap(context: Context, command: JsonObject): String {
+        val x = command.int("x") ?: return failure("vtap 需要 x 坐标")
+        val y = command.int("y") ?: return failure("vtap 需要 y 坐标")
+        VirtualScreen.refresh(context)
+        return VirtualScreen.tap(context, x, y).fold(
+            { success("已在虚拟屏点击 ($x, $y)") },
+            { failure(it.message ?: "点击失败") },
+        )
+    }
+
+    private suspend fun vswipe(context: Context, command: JsonObject): String {
+        val x1 = command.int("x1") ?: return failure("vswipe 需要 x1")
+        val y1 = command.int("y1") ?: return failure("vswipe 需要 y1")
+        val x2 = command.int("x2") ?: return failure("vswipe 需要 x2")
+        val y2 = command.int("y2") ?: return failure("vswipe 需要 y2")
+        val ms = command.int("durationMs") ?: 300
+        VirtualScreen.refresh(context)
+        return VirtualScreen.swipe(context, x1, y1, x2, y2, ms).fold(
+            { success("已在虚拟屏滑动 ($x1,$y1) → ($x2,$y2)") },
+            { failure(it.message ?: "滑动失败") },
+        )
+    }
+
+    private suspend fun vtype(context: Context, command: JsonObject): String {
+        val text = command.string("text") ?: return failure("vtype 需要 text")
+        VirtualScreen.refresh(context)
+        return VirtualScreen.text(context, text).fold(
+            { success("已在虚拟屏输入：$text") },
+            { failure(it.message ?: "输入失败") },
+        )
+    }
+
+    private suspend fun vkey(context: Context, command: JsonObject): String {
+        val code = command.int("code") ?: when (command.string("code")?.lowercase()) {
+            "back", "返回" -> 4
+            "home", "桌面" -> 3
+            "enter", "回车" -> 66
+            "recents", "最近任务" -> 187
+            "menu" -> 82
+            else -> null
+        } ?: return failure("vkey 需要 code（4/3/66/187/82 或 back/home/enter/recents/menu）")
+        VirtualScreen.refresh(context)
+        return VirtualScreen.key(context, code).fold(
+            { success("已发送按键 $code") },
+            { failure(it.message ?: "按键失败") },
+        )
     }
 
     private fun tap(service: WbAccessibilityService, command: JsonObject): String {

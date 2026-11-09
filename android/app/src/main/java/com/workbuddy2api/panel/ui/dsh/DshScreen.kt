@@ -1,25 +1,41 @@
 package com.workbuddy2api.panel.ui.dsh
 
 import android.annotation.SuppressLint
+import android.app.Activity
+import android.content.Context
+import android.content.ContextWrapper
+import android.os.SystemClock
 import android.util.Log
+import android.webkit.ConsoleMessage
 import android.webkit.WebChromeClient
 import android.webkit.WebResourceRequest
 import android.webkit.WebView
 import android.webkit.WebViewClient
+import androidx.compose.foundation.BorderStroke
+import androidx.compose.foundation.clickable
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.Spacer
+import androidx.compose.foundation.layout.WindowInsets
+import androidx.compose.foundation.layout.displayCutout
 import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.height
 import androidx.compose.foundation.layout.heightIn
+import androidx.compose.foundation.layout.isImeVisible
 import androidx.compose.foundation.layout.padding
+import androidx.compose.foundation.layout.statusBars
+import androidx.compose.foundation.layout.union
+import androidx.compose.foundation.layout.windowInsetsPadding
 import androidx.compose.foundation.rememberScrollState
+import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.foundation.verticalScroll
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.outlined.Description
+import androidx.compose.material.icons.outlined.Fullscreen
+import androidx.compose.material.icons.outlined.FullscreenExit
 import androidx.compose.material.icons.outlined.Info
 import androidx.compose.material.icons.outlined.Refresh
 import androidx.compose.material3.CircularProgressIndicator
@@ -27,9 +43,11 @@ import androidx.compose.material3.Icon
 import androidx.compose.material3.IconButton
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.ModalBottomSheet
+import androidx.compose.material3.Surface
 import androidx.compose.material3.Text
 import androidx.compose.material3.rememberModalBottomSheetState
 import androidx.compose.runtime.Composable
+import androidx.compose.runtime.DisposableEffect
 import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableIntStateOf
@@ -39,12 +57,17 @@ import androidx.compose.runtime.rememberCoroutineScope
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
+import androidx.compose.ui.draw.clip
+import androidx.compose.ui.graphics.toArgb
 import androidx.compose.ui.platform.LocalClipboardManager
 import androidx.compose.ui.platform.LocalView
 import androidx.compose.ui.text.AnnotatedString
 import androidx.compose.ui.text.font.FontFamily
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.viewinterop.AndroidView
+import androidx.core.view.WindowCompat
+import androidx.core.view.WindowInsetsCompat
+import androidx.core.view.WindowInsetsControllerCompat
 import androidx.lifecycle.compose.collectAsStateWithLifecycle
 import com.workbuddy2api.panel.dsh.DshManager
 import com.workbuddy2api.panel.dsh.DshManager.State
@@ -66,15 +89,19 @@ import kotlinx.coroutines.launch
 @OptIn(androidx.compose.material3.ExperimentalMaterial3Api::class)
 @SuppressLint("SetJavaScriptEnabled")
 @Composable
-fun DshScreen(manager: DshManager, gatewayApiKey: String = "") {
+fun DshScreen(
+    manager: DshManager,
+    gatewayApiKey: String = "",
+    immersive: Boolean = false,
+    onImmersiveChange: (Boolean) -> Unit = {},
+) {
     val wb = LocalWbColors.current
-    val scope = rememberCoroutineScope()
     val state by manager.state.collectAsStateWithLifecycle()
     var showLogs by remember { mutableStateOf(false) }
     var showInfo by remember { mutableStateOf(false) }
-    // WebView 兼容自检（Chromium 版本）与页面底色（状态栏跟随）
+    // WebView 兼容自检（Chromium 版本）。页面底色不再走 Compose 状态：
+    // 桥接回调直接改 WebView 背景与系统栏图标，避免整屏重组（见 DshWebView）。
     var chromeMajor by remember { mutableIntStateOf(0) }
-    var pageBg by remember { mutableStateOf<Int?>(null) }
     // 进入 DSH 页即自动拉起内核（未运行时），省掉一次点击。
     LaunchedEffect(Unit) {
         val cur = manager.state.value
@@ -82,96 +109,64 @@ fun DshScreen(manager: DshManager, gatewayApiKey: String = "") {
             manager.startAsync().join()
         }
     }
+    // 沉浸：隐藏系统状态栏/手势条；退出时恢复。离开 DSH 页也会恢复。
+    ImmersiveSystemBars(immersive)
 
-    Column(Modifier.fillMaxSize()) {
-        WbTopBar(
-            title = "DSH 内核",
-            subtitle = when (val s = state) {
-                is State.Running -> "独立进程 · ${manager.baseUrl() ?: ""}"
-                is State.Extracting -> "解压内核中…"
-                is State.Starting -> s.message
-                is State.Failed -> "启动失败"
-                else -> "未启动"
-            },
-            actions = {
-                IconButton(onClick = { showInfo = true }) {
-                    Icon(Icons.Outlined.Info, contentDescription = "网关接入信息", tint = wb.ink2)
-                }
-                IconButton(onClick = { showLogs = true }) {
-                    Icon(Icons.Outlined.Description, contentDescription = "日志", tint = wb.ink2)
-                }
-                IconButton(onClick = { manager.restartAsync() }) {
-                    Icon(Icons.Outlined.Refresh, contentDescription = "重启", tint = wb.ink2)
-                }
-            },
-        )
-        AllFilesAccessBanner()
-        DshChromeCompatBanner(chromeMajor)
-        ApplyPageBackgroundToSystemBars(pageBg)
-        when (val s = state) {
-            is State.Running -> DshWebView(
-                manager = manager,
-                onChromeMajor = { chromeMajor = it },
-                onPageBg = { pageBg = it },
+    Box(Modifier.fillMaxSize()) {
+        Column(Modifier.fillMaxSize()) {
+            if (!immersive) {
+                WbTopBar(
+                    title = "DSH 内核",
+                    subtitle = when (val s = state) {
+                        is State.Running -> "独立进程 · ${manager.baseUrl() ?: ""}"
+                        is State.Extracting -> "解压内核中…"
+                        is State.Starting -> s.message
+                        is State.Failed -> "启动失败"
+                        else -> "未启动"
+                    },
+                    actions = {
+                        IconButton(onClick = { onImmersiveChange(true) }) {
+                            Icon(Icons.Outlined.Fullscreen, contentDescription = "全屏使用", tint = wb.ink2)
+                        }
+                        IconButton(onClick = { showInfo = true }) {
+                            Icon(Icons.Outlined.Info, contentDescription = "网关接入信息", tint = wb.ink2)
+                        }
+                        IconButton(onClick = { showLogs = true }) {
+                            Icon(Icons.Outlined.Description, contentDescription = "日志", tint = wb.ink2)
+                        }
+                        IconButton(onClick = { manager.restartAsync() }) {
+                            Icon(Icons.Outlined.Refresh, contentDescription = "重启", tint = wb.ink2)
+                        }
+                    },
+                )
+                AllFilesAccessBanner()
+                DshChromeCompatBanner(chromeMajor)
+            }
+            Box(
+                Modifier
+                    .weight(1f)
+                    .fillMaxWidth()
+                    // 全屏时页面顶到 0，避让挖孔/刘海；无开孔机型该 inset 为 0，仍是整屏。
+                    .then(
+                        if (immersive) {
+                            Modifier.windowInsetsPadding(WindowInsets.displayCutout)
+                        } else {
+                            Modifier
+                        },
+                    ),
+            ) {
+                DshContent(
+                    manager = manager,
+                    state = state,
+                    onChromeMajor = { if (chromeMajor != it) chromeMajor = it },
+                )
+            }
+        }
+        if (immersive) {
+            DshExitFullscreenChip(
+                onExit = { onImmersiveChange(false) },
+                modifier = Modifier.align(Alignment.TopCenter),
             )
-            is State.Extracting -> Column(
-                Modifier.fillMaxSize().padding(24.dp),
-                horizontalAlignment = Alignment.CenterHorizontally,
-                verticalArrangement = Arrangement.Center,
-            ) {
-                CircularProgressIndicator(Modifier.height(28.dp), strokeWidth = 3.dp, color = wb.accent)
-                Spacer(Modifier.height(14.dp))
-                Text(
-                    "首次启动：解压 DSH 内核（约 28k 个文件，几秒钟）",
-                    style = MaterialTheme.typography.bodyMedium,
-                    color = wb.ink2,
-                )
-                Text("之后启动将直接进入控制台", style = MaterialTheme.typography.bodySmall, color = wb.ink3)
-            }
-            is State.Starting -> Column(
-                Modifier.fillMaxSize().padding(24.dp),
-                horizontalAlignment = Alignment.CenterHorizontally,
-                verticalArrangement = Arrangement.Center,
-            ) {
-                CircularProgressIndicator(Modifier.height(28.dp), strokeWidth = 3.dp, color = wb.accent)
-                Spacer(Modifier.height(14.dp))
-                Text(s.message, style = MaterialTheme.typography.bodyMedium, color = wb.ink2)
-                Text(
-                    "正在拉起独立 node 进程并等待控制台就绪…",
-                    style = MaterialTheme.typography.bodySmall,
-                    color = wb.ink3,
-                )
-            }
-            is State.Failed -> Column(
-                Modifier.fillMaxSize().padding(16.dp),
-                horizontalAlignment = Alignment.CenterHorizontally,
-            ) {
-                WbCard(Modifier.fillMaxWidth()) {
-                    Text("DSH 启动失败", style = MaterialTheme.typography.titleMedium, color = wb.bad)
-                    Spacer(Modifier.height(8.dp))
-                    Text(
-                        s.message,
-                        style = MaterialTheme.typography.bodySmall,
-                        color = wb.ink2,
-                        fontFamily = FontFamily.Monospace,
-                    )
-                }
-                Spacer(Modifier.height(12.dp))
-                WbButton(
-                    text = "重新启动",
-                    onClick = { manager.restartAsync() },
-                    primary = true,
-                    modifier = Modifier.fillMaxWidth(),
-                )
-                Spacer(Modifier.height(8.dp))
-                // 连续失败时提供安全模式：用出厂 profile 启动，保留会话与凭证
-                WbButton(
-                    text = "以安全模式启动（出厂配置）",
-                    onClick = { manager.startSafeModeAsync() },
-                    modifier = Modifier.fillMaxWidth(),
-                )
-            }
-            else -> DshIdleCard(manager)
         }
     }
 
@@ -212,6 +207,81 @@ fun DshScreen(manager: DshManager, gatewayApiKey: String = "") {
                 Spacer(Modifier.height(16.dp))
             }
         }
+    }
+}
+
+/**
+ * DSH 内容区：按内核状态渲染 WebView / 解压 / 启动 / 失败 / 未启动。
+ *
+ * 独立成层，进出全屏只改变量出来的布局约束，不重建 WebView。
+ */
+@Composable
+private fun DshContent(
+    manager: DshManager,
+    state: State,
+    onChromeMajor: (Int) -> Unit,
+) {
+    val wb = LocalWbColors.current
+    when (state) {
+        is State.Running -> DshWebView(manager = manager, onChromeMajor = onChromeMajor)
+        is State.Extracting -> Column(
+            Modifier.fillMaxSize().padding(24.dp),
+            horizontalAlignment = Alignment.CenterHorizontally,
+            verticalArrangement = Arrangement.Center,
+        ) {
+            CircularProgressIndicator(Modifier.height(28.dp), strokeWidth = 3.dp, color = wb.accent)
+            Spacer(Modifier.height(14.dp))
+            Text(
+                "首次启动：解压 DSH 内核（约 28k 个文件，几秒钟）",
+                style = MaterialTheme.typography.bodyMedium,
+                color = wb.ink2,
+            )
+            Text("之后启动将直接进入控制台", style = MaterialTheme.typography.bodySmall, color = wb.ink3)
+        }
+        is State.Starting -> Column(
+            Modifier.fillMaxSize().padding(24.dp),
+            horizontalAlignment = Alignment.CenterHorizontally,
+            verticalArrangement = Arrangement.Center,
+        ) {
+            CircularProgressIndicator(Modifier.height(28.dp), strokeWidth = 3.dp, color = wb.accent)
+            Spacer(Modifier.height(14.dp))
+            Text(state.message, style = MaterialTheme.typography.bodyMedium, color = wb.ink2)
+            Text(
+                "正在拉起独立 node 进程并等待控制台就绪…",
+                style = MaterialTheme.typography.bodySmall,
+                color = wb.ink3,
+            )
+        }
+        is State.Failed -> Column(
+            Modifier.fillMaxSize().padding(16.dp),
+            horizontalAlignment = Alignment.CenterHorizontally,
+        ) {
+            WbCard(Modifier.fillMaxWidth()) {
+                Text("DSH 启动失败", style = MaterialTheme.typography.titleMedium, color = wb.bad)
+                Spacer(Modifier.height(8.dp))
+                Text(
+                    state.message,
+                    style = MaterialTheme.typography.bodySmall,
+                    color = wb.ink2,
+                    fontFamily = FontFamily.Monospace,
+                )
+            }
+            Spacer(Modifier.height(12.dp))
+            WbButton(
+                text = "重新启动",
+                onClick = { manager.restartAsync() },
+                primary = true,
+                modifier = Modifier.fillMaxWidth(),
+            )
+            Spacer(Modifier.height(8.dp))
+            // 连续失败时提供安全模式：用出厂 profile 启动，保留会话与凭证
+            WbButton(
+                text = "以安全模式启动（出厂配置）",
+                onClick = { manager.startSafeModeAsync() },
+                modifier = Modifier.fillMaxWidth(),
+            )
+        }
+        else -> DshIdleCard(manager)
     }
 }
 
@@ -300,7 +370,6 @@ private fun InfoCopyRow(label: String, value: String, onCopy: () -> Unit) {
 private fun DshWebView(
     manager: DshManager,
     onChromeMajor: (Int) -> Unit = {},
-    onPageBg: (Int?) -> Unit = {},
 ) {
     val wb = LocalWbColors.current
     // DSH 的 token URL 是一次性的，只能加载一次；重复加载会显示
@@ -342,12 +411,31 @@ private fun DshWebView(
             if (cb != null) runCatching { cb.onReceiveValue(null) }
         }
     }
+    // 离开 DSH 页 / 内核重启时主动销毁 WebView：AndroidView 不会替我们释放，
+    // 反复进出会累积渲染进程与 JS 堆（内存越用越紧，最终表现为整体卡顿）。
+    val webHolder = remember { WebViewHolder() }
+    androidx.compose.runtime.DisposableEffect(Unit) {
+        onDispose {
+            val v = webHolder.view
+            webHolder.view = null
+            if (v != null) {
+                runCatching { v.stopLoading() }
+                runCatching { (v.parent as? android.view.ViewGroup)?.removeView(v) }
+                runCatching { v.destroy() }
+            }
+        }
+    }
 
     AndroidView(
         modifier = Modifier.fillMaxSize(),
         factory = { ctx ->
             WebView(ctx).apply {
-                setBackgroundColor(android.graphics.Color.TRANSPARENT)
+                webHolder.view = this
+                // 不透明底色：透明 WebView 会让整屏每帧多一次 alpha 混合，是滚动掉帧的常见来源。
+                setBackgroundColor(wb.bg.toArgb())
+                overScrollMode = android.view.View.OVER_SCROLL_NEVER
+                isVerticalScrollBarEnabled = false
+                isHorizontalScrollBarEnabled = false
                 settings.apply {
                     javaScriptEnabled = true
                     domStorageEnabled = true
@@ -357,6 +445,10 @@ private fun DshWebView(
                     builtInZoomControls = false
                     displayZoomControls = false
                     textZoom = 100
+                    // 预栅格化屏幕外内容：长会话滚动时少一截合成开销。
+                    offscreenPreRaster = true
+                    mediaPlaybackRequiresUserGesture = true
+                    javaScriptCanOpenWindowsAutomatically = false
                 }
                 webViewClient = object : WebViewClient() {
                     override fun shouldOverrideUrlLoading(
@@ -399,11 +491,19 @@ private fun DshWebView(
                     }
                 }
                 webChromeClient = object : WebChromeClient() {
-                    override fun onConsoleMessage(msg: android.webkit.ConsoleMessage): Boolean {
-                        Log.i(
-                            TAG_WEB,
-                            "console[${msg.messageLevel()}] ${msg.message()} @${msg.sourceId()}:${msg.lineNumber()}",
-                        )
+                    private var lastLogAt = 0L
+
+                    override fun onConsoleMessage(msg: ConsoleMessage): Boolean {
+                        // 流式渲染时前端 console 输出非常密集；release 只留告警/错误并统一限流，
+                        // 避免每条日志都写一次 logcat 拖慢渲染线程（debug 包保留全量便于排查）。
+                        val level = msg.messageLevel()
+                        val important = level == ConsoleMessage.MessageLevel.ERROR ||
+                            level == ConsoleMessage.MessageLevel.WARNING
+                        if (!com.workbuddy2api.panel.BuildConfig.DEBUG && !important) return true
+                        val now = SystemClock.uptimeMillis()
+                        if (now - lastLogAt < CONSOLE_LOG_MIN_INTERVAL_MS) return true
+                        lastLogAt = now
+                        Log.i(TAG_WEB, "console[$level] ${msg.message()} @${msg.sourceId()}:${msg.lineNumber()}")
                         return true
                     }
 
@@ -452,13 +552,20 @@ private fun DshWebView(
                         com.workbuddy2api.panel.util.DeviceEnv.chromeMajor(settings.userAgentString),
                     )
                 }
-                // 页面 → 壳：底色上报（状态栏/导航栏跟随 DSH 主题）
+                // 页面 → 壳：底色上报。直接改 WebView 背景与系统栏图标，不再回传 Compose
+                // 状态——主题切换只影响系统栏，不会触发整屏重组与 WebView 重新布局。
                 runCatching {
+                    val activity = ctx.findActivity()
                     addJavascriptInterface(
                         object {
                             @android.webkit.JavascriptInterface
                             fun onBg(css: String) {
-                                runCatching { onPageBg(parseCssColor(css)) }
+                                val color = parseCssColor(css) ?: return
+                                // JS 桥跑在 WebView 的 JavaBridge 线程，View/Window 操作必须回 UI 线程。
+                                post {
+                                    runCatching { setBackgroundColor(color) }
+                                    runCatching { applySystemBarAppearance(activity, color) }
+                                }
                             }
                         },
                         "wbshell",
@@ -497,6 +604,11 @@ private fun DshWebView(
 }
 
 private const val TAG_WEB = "WbDshWeb"
+
+/** WebView 持有者：只用于离开页面时销毁实例，不参与 Compose 重组。 */
+private class WebViewHolder {
+    var view: WebView? = null
+}
 
 /** 附件选择器链路的 logcat tag（与页面 bridge 日志分开，便于一眼定位断点）。 */
 private const val TAG_FILE = "WbDshFile"
@@ -598,53 +710,104 @@ private const val FILE_PROBE_JS = """
  * 表现为「WebView 里点了没反应」。
  *
  * 修法：页面加载后把 html/body/#root 高度钉成实际像素，并把样式表里的 vh 单位就地
- * 换算为 px；SPA 后续动态插入的样式由 MutationObserver 兜底。
+ * 换算为 px。
+ *
+ * 性能约束（重要）：旧实现在 documentElement 上挂了 `childList+subtree` 的
+ * MutationObserver，聊天流式输出时每个 token 都会重置定时器，随后全量遍历所有
+ * 样式表 + 所有 `[style]` 元素做 `setProperty`——相当于每 350ms 强制一次整页样式
+ * 重算，是控制台滚动/打字掉帧的主因。现在：
+ *   1. 高度只在视口尺寸真的变化时更新（ResizeObserver + 高度去重）；
+ *   2. 全量样式换算只在首帧做一次；
+ *   3. 只监听 <head> 里新增的 <style>/<link>，并且只补丁新增节点。
  */
 private const val VH_FIX_JS = """
 (function(){
   if (window.__wbVhFix) { try { window.__wbVhFix(); } catch(e){} return; }
-  var H = document.documentElement.clientHeight || window.innerHeight || 0;
-  if (!H) return;
+  var H = 0, patchedOnce = false, scheduled = false;
   var re = /(-?[0-9]*\.?[0-9]+)(?:d|s|l)?vh/g;
   function fixVal(v){ return v.replace(re, function(m, n){ return (parseFloat(n) * H / 100).toFixed(2) + 'px'; }); }
   function patchStyle(st){
+    if (!st || !st.length) return;
     for (var k = 0; k < st.length; k++) {
       var prop = st[k], val = st.getPropertyValue(prop);
       if (val && val.indexOf('vh') >= 0) st.setProperty(prop, fixVal(val), st.getPropertyPriority(prop));
     }
   }
   function patchRules(list){
+    if (!list) return;
     for (var i = 0; i < list.length; i++) {
       var r = list[i];
       if (r.style && r.style.length) patchStyle(r.style);
-      if (r.cssRules) patchRules(r.cssRules);
+      if (r.cssRules && r.cssRules.length) patchRules(r.cssRules);
     }
   }
   function patchInline(){
     var els = document.querySelectorAll('[style]');
     for (var i = 0; i < els.length; i++) patchStyle(els[i].style);
   }
-  window.__wbVhFix = function(){
-    var h = document.documentElement.clientHeight;
-    if (!h) return;
-    H = h;
-    var st = document.getElementById('wb-vhfix');
-    if (!st) { st = document.createElement('style'); st.id = 'wb-vhfix'; (document.head || document.documentElement).appendChild(st); }
-    st.textContent = 'html,body,#root{height:' + H + 'px !important;min-height:' + H + 'px !important}'
-                   + 'html,body{margin:0 !important;overflow:hidden !important}';
+  function patchAll(){
+    if (patchedOnce) return;
+    patchedOnce = true;
     for (var s = 0; s < document.styleSheets.length; s++) {
       var rules = null;
       try { rules = document.styleSheets[s].cssRules; } catch (e) { continue; }
       if (rules) patchRules(rules);
     }
-    patchInline();
+    try { patchInline(); } catch (e) {}
+  }
+  function apply(){
+    var h = document.documentElement.clientHeight || window.innerHeight || 0;
+    if (!h) return;
+    var changed = Math.abs(h - H) >= 1;
+    H = h;
+    var st = document.getElementById('wb-vhfix');
+    if (!st) {
+      st = document.createElement('style');
+      st.id = 'wb-vhfix';
+      (document.head || document.documentElement).appendChild(st);
+      changed = true;
+    }
+    if (changed) {
+      st.textContent = 'html,body,#root{height:' + H + 'px !important;min-height:' + H + 'px !important}'
+                     + 'html,body{margin:0 !important;overflow:hidden !important}';
+      patchAll();
+    }
+  }
+  window.__wbVhFix = function(){
+    if (scheduled) return;
+    scheduled = true;
+    var run = function(){ scheduled = false; try { apply(); } catch(e) {} };
+    if (window.requestAnimationFrame) requestAnimationFrame(run); else setTimeout(run, 16);
   };
   window.__wbVhFix();
+  // 只跟随视口尺寸变化（转屏/全屏切换/键盘），不再监听整棵 DOM。
   try {
-    new MutationObserver(function(){
-      clearTimeout(window.__wbVhT);
-      window.__wbVhT = setTimeout(function(){ try { window.__wbVhFix(); } catch(e){} }, 350);
-    }).observe(document.documentElement, { childList: true, subtree: true });
+    new ResizeObserver(function(){ window.__wbVhFix(); }).observe(document.documentElement);
+  } catch (e) {
+    window.addEventListener('resize', function(){ window.__wbVhFix(); }, { passive: true });
+  }
+  window.addEventListener('orientationchange', function(){ setTimeout(function(){ window.__wbVhFix(); }, 260); }, { passive: true });
+  // SPA 运行时新增的样式表：只补丁新增的那一个节点。
+  function patchLater(node){
+    setTimeout(function(){
+      try { if (node.sheet) patchRules(node.sheet.cssRules); } catch (e) {}
+    }, 300);
+  }
+  try {
+    new MutationObserver(function(muts){
+      for (var i = 0; i < muts.length; i++) {
+        var nodes = muts[i].addedNodes;
+        for (var j = 0; j < nodes.length; j++) {
+          var n = nodes[j];
+          if (!n || n.nodeType !== 1) continue;
+          if (n.tagName === 'STYLE') {
+            try { if (n.sheet) patchRules(n.sheet.cssRules); } catch (e) {}
+          } else if (n.tagName === 'LINK') {
+            patchLater(n);
+          }
+        }
+      }
+    }).observe(document.head || document.documentElement, { childList: true });
   } catch (e) {}
 })();
 """
@@ -724,42 +887,91 @@ private fun DshChromeCompatBanner(chromeMajor: Int) {
     }
 }
 
-/** 让状态栏/导航栏跟随 DSH 页面底色（浅色底用深色图标）。 */
+/**
+ * 沉浸式全屏：进入 DSH 时隐藏系统状态栏与手势条（上滑临时唤出），
+ * 退出回到 App 界面时恢复。布尔值取反即恢复，无需额外状态。
+ */
+@OptIn(androidx.compose.foundation.layout.ExperimentalLayoutApi::class)
 @Composable
-private fun ApplyPageBackgroundToSystemBars(bg: Int?) {
+private fun ImmersiveSystemBars(enabled: Boolean) {
     val view = LocalView.current
-    LaunchedEffect(bg) {
-        val color = bg ?: return@LaunchedEffect
-        val activity = view.context as? android.app.Activity ?: return@LaunchedEffect
-        val window = activity.window
-        val light = isLightColor(color)
+    val window = remember(view) { view.context.findActivity()?.window }
+    val controller = remember(window, view) {
+        window?.let { WindowCompat.getInsetsController(it, view) }
+    }
+    fun hideBars() {
         runCatching {
-            if (android.os.Build.VERSION.SDK_INT >= android.os.Build.VERSION_CODES.R) {
-                window.insetsController?.setSystemBarsAppearance(
-                    if (light) {
-                        android.view.WindowInsetsController.APPEARANCE_LIGHT_STATUS_BARS or
-                            android.view.WindowInsetsController.APPEARANCE_LIGHT_NAVIGATION_BARS
-                    } else {
-                        0
-                    },
-                    android.view.WindowInsetsController.APPEARANCE_LIGHT_STATUS_BARS or
-                        android.view.WindowInsetsController.APPEARANCE_LIGHT_NAVIGATION_BARS,
-                )
-            } else {
-                @Suppress("DEPRECATION")
-                window.statusBarColor = color
-                @Suppress("DEPRECATION")
-                window.navigationBarColor = color
-                @Suppress("DEPRECATION")
-                window.decorView.systemUiVisibility = if (light) {
-                    android.view.View.SYSTEM_UI_FLAG_LIGHT_STATUS_BAR
-                } else {
-                    0
-                }
-            }
+            controller?.systemBarsBehavior = WindowInsetsControllerCompat.BEHAVIOR_SHOW_TRANSIENT_BARS_BY_SWIPE
+            controller?.hide(WindowInsetsCompat.Type.systemBars())
+        }
+    }
+    DisposableEffect(enabled, controller) {
+        if (enabled) hideBars() else runCatching { controller?.show(WindowInsetsCompat.Type.systemBars()) }
+        onDispose {
+            // 离开 DSH 页（切 Tab / 关页）一定要把系统栏还回去，否则主界面会缺状态栏。
+            runCatching { controller?.show(WindowInsetsCompat.Type.systemBars()) }
+        }
+    }
+    // 输入法弹出/收起后系统可能把状态栏一起放回来：键盘收起时再隐藏一次。
+    val imeVisible = WindowInsets.isImeVisible
+    LaunchedEffect(enabled, imeVisible) {
+        if (enabled && !imeVisible) hideBars()
+    }
+}
+
+/**
+ * 全屏模式下的浮动「退出全屏」按钮：顶部居中，不挡 DSH 页自身的侧栏/设置入口；
+ * 点一下回到 App 界面（底部导航 + 顶栏恢复）。
+ */
+@Composable
+private fun DshExitFullscreenChip(onExit: () -> Unit, modifier: Modifier = Modifier) {
+    val wb = LocalWbColors.current
+    val shape = RoundedCornerShape(50)
+    Surface(
+        modifier = modifier
+            .windowInsetsPadding(WindowInsets.statusBars.union(WindowInsets.displayCutout))
+            .padding(top = 8.dp)
+            .height(34.dp)
+            .clip(shape)
+            .clickable(onClick = onExit),
+        shape = shape,
+        color = if (wb.isDark) wb.surface2 else wb.surface,
+        contentColor = wb.ink2,
+        border = BorderStroke(1.dp, wb.line),
+        shadowElevation = 4.dp,
+    ) {
+        Row(
+            Modifier.padding(horizontal = 12.dp),
+            verticalAlignment = Alignment.CenterVertically,
+            horizontalArrangement = Arrangement.spacedBy(6.dp),
+        ) {
+            Icon(
+                imageVector = Icons.Outlined.FullscreenExit,
+                contentDescription = null,
+                modifier = Modifier.height(16.dp),
+            )
+            Text("退出全屏", style = MaterialTheme.typography.labelMedium)
         }
     }
 }
+
+/** 系统栏图标明暗跟随页面底色（页面主题切换时由 JS 桥直接调用，不走重组）。 */
+private fun applySystemBarAppearance(activity: Activity?, color: Int) {
+    val window = activity?.window ?: return
+    val controller = WindowCompat.getInsetsController(window, window.decorView)
+    val light = isLightColor(color)
+    controller.isAppearanceLightStatusBars = light
+    controller.isAppearanceLightNavigationBars = light
+}
+
+private tailrec fun Context.findActivity(): Activity? = when (this) {
+    is Activity -> this
+    is ContextWrapper -> baseContext.findActivity()
+    else -> null
+}
+
+/** release 包 console 日志的最小间隔：流式输出时避免每条日志都写一次 logcat。 */
+private const val CONSOLE_LOG_MIN_INTERVAL_MS = 300L
 
 private fun isLightColor(color: Int): Boolean {
     val r = (color shr 16) and 0xFF

@@ -1,6 +1,6 @@
 # Android 端 Agent 工具手册：为什么是插件而不是预设
 
-> 对应版本：3.10.0 · 相关代码：`android/dsh/assets/dsh-plugins/wb-mobile/`、
+> 对应版本：3.13.0（3.10.0 初版；3.13.0 增补虚拟屏工具）· 相关代码：`android/dsh/assets/dsh-plugins/wb-mobile/`、
 > `android/app/src/main/java/com/workbuddy2api/panel/dsh/MobilePlugin.kt`、
 > `dsh/LocalBridge.kt`、`dsh/shim.c`
 
@@ -68,10 +68,14 @@ PTC 模式（`run_code`）本身是**一个工具**（`dsh-tools` 的 `run_code`
 | `wb_env` | `node:fs` 扫 PATH 探测 28 个常用命令 + 共享存储可写性 + 工具链/CLI 清单 + `POST /health` 拿 Shizuku 状态 |
 | `wb_shizuku` | `POST http://127.0.0.1:7865/shell` → 宿主 `ShizukuShell.exec`（uid 2000） |
 | `wb_notify` | `POST http://127.0.0.1:7865/notify` |
+| `wb_vdisplay` | `POST /vdisplay {action: status/start/stop/apps/launch}` → `vdisplay/VirtualScreen`：overlay 显示生命周期、应用列表与启动 |
+| `wb_vscreen` | `POST /vdisplay {action:"shot"}`：`screencap -d <id> -p` → `cache/vdisplay/latest.png`，返回路径与分辨率 |
+| `wb_vinput` | `POST /vdisplay {action: tap/swipe/key/text}`：`input -d <id>` 注入到虚拟屏 |
 
 提示词段 `workbuddy:android-environment`（order 1050）写清楚：工作区、所有文件访问、
 POSIX-only 语法、toybox 与 GNU 差异、npm/pnpm 位置、工具链安装位置、Shizuku 边界、
-`wb_env` 先行、禁止原样重试。
+`wb_env` 先行、禁止原样重试；3.13.0 起还写明「虚拟屏」的使用时机（别动用户真机）、
+坐标基准、结束要 stop、单实例应用与支付类操作的红线。
 
 ### 4.2 宿主侧
 
@@ -81,7 +85,7 @@ POSIX-only 语法、toybox 与 GNU 差异、npm/pnpm 位置、工具链安装位
 | `DshManager.doStart()` | 启动内核前 `MobilePlugin.ensure()` + `InstalledPlugins.add()`，再重写 patch |
 | `DshManager.ensureBinShims()` | `home/bin` 增加 `bash` / `sh` 链接 → `libwbnode_shim.so` |
 | `dsh/shim.c` | `bash`/`sh`（含 `#!/bin/bash`、`#!/bin/sh` shebang）落到 `/system/bin/sh`；顺带修掉 shebang 分支里那条无参兜底 `execv` |
-| `dsh/LocalBridge.kt` | 新增 `POST /shell`（Shizuku），`POST /health` 返回 Shizuku available/granted |
+| `dsh/LocalBridge.kt` | 新增 `POST /shell`（Shizuku），`POST /health` 返回 Shizuku available/granted；3.13.0 起新增 `POST /vdisplay`（虚拟屏） |
 | `app/build.gradle.kts` | `sourceSets.main.assets.srcDir("../dsh/assets")`，插件源码单点维护 |
 
 ### 4.3 双保险

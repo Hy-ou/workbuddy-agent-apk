@@ -245,7 +245,7 @@ fun AssistantScreen(
         if (content.isEmpty() || agent == null || streaming) return
 
         val active = ensureSession()
-        val toolsEnabled = toolMode && MobileTools.isReady(context)
+        val toolsEnabled = toolMode && MobileTools.toolsAvailable(context)
         val systemPrompt = buildSystemPrompt(active.systemPrompt, toolsEnabled)
         val now = System.currentTimeMillis()
         val userMessage = ChatMessage(role = "user", content = content, ts = now)
@@ -269,7 +269,7 @@ fun AssistantScreen(
                     val answer = streamChat(agent, active.model, history, systemPrompt) { partial ->
                         updateLastContent(partial, pending = true)
                     }
-                    val toolJson = if (toolMode && MobileTools.isReady(context)) {
+                    val toolJson = if (toolMode && MobileTools.toolsAvailable(context)) {
                         extractToolCall(answer)
                     } else {
                         null
@@ -487,8 +487,8 @@ fun AssistantScreen(
             toolReady = toolReady,
             onToolModeChange = { enabled ->
                 toolMode = enabled
-                if (enabled && !MobileTools.isReady(context)) {
-                    scope.launch { snackbar.showSnackbar("请先开启无障碍服务，手机操作才能生效") }
+                if (enabled && !MobileTools.toolsAvailable(context)) {
+                    scope.launch { snackbar.showSnackbar("请先开启无障碍服务，或安装并授权 Shizuku（虚拟屏），手机操作才能生效") }
                 }
             },
             onOpenAccessibility = { MobileTools.openSettings(context) },

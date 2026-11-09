@@ -9,6 +9,9 @@ import androidx.compose.runtime.remember
 import androidx.compose.runtime.rememberCoroutineScope
 import androidx.compose.runtime.rememberUpdatedState
 import androidx.compose.runtime.setValue
+import androidx.lifecycle.Lifecycle
+import androidx.lifecycle.compose.LocalLifecycleOwner
+import androidx.lifecycle.repeatOnLifecycle
 import kotlinx.coroutines.CancellationException
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Job
@@ -54,10 +57,15 @@ class Loader<T>(
     fun refresh(quiet: Boolean = false) {
         if (job?.isActive == true) return
         if (!quiet && state !is Loadable.Ready) state = Loadable.Loading
-        refreshing = true
+        // 静默轮询不碰 refreshing：否则下拉刷新指示器每 5 秒闪一次，
+        // 既误导用户（看起来像有人在手动刷新），也白白多两次整屏重组。
+        if (!quiet) refreshing = true
         job = scope.launch {
             try {
-                state = Loadable.Ready(load())
+                val next = Loadable.Ready(load())
+                // 轮询结果没变化就不写状态：数据类 equals 相等时跳过，
+                // 避免定时刷新把整张列表/图表重组一遍（掉帧的主要来源之一）。
+                if (next != state) state = next
             } catch (e: CancellationException) {
                 throw e
             } catch (e: Exception) {
@@ -66,7 +74,7 @@ class Loader<T>(
                     state = Loadable.Failed(e.message?.takeIf { it.isNotBlank() } ?: "加载失败")
                 }
             } finally {
-                refreshing = false
+                if (!quiet) refreshing = false
             }
         }
     }
@@ -115,11 +123,17 @@ fun <T> rememberPollingLoader(
     load: suspend () -> T,
 ): Loader<T> {
     val loader = rememberLoader(*keys) { load() }
-    LaunchedEffect(loader, enabled, intervalMs) {
+    val lifecycleOwner = LocalLifecycleOwner.current
+    LaunchedEffect(loader, enabled, intervalMs, lifecycleOwner) {
         if (!enabled || intervalMs <= 0L) return@LaunchedEffect
-        while (isActive) {
-            delay(intervalMs)
+        // 只在界面可见（STARTED 及以上）时轮询：后台继续每 5 秒打接口既费电，
+        // 也会让系统把进程排到低优先级，回前台后更容易掉帧。
+        lifecycleOwner.lifecycle.repeatOnLifecycle(Lifecycle.State.STARTED) {
             loader.refresh(quiet = true)
+            while (isActive) {
+                delay(intervalMs)
+                loader.refresh(quiet = true)
+            }
         }
     }
     return loader

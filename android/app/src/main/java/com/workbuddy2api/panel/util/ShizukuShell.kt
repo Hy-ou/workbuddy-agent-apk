@@ -73,6 +73,42 @@ object ShizukuShell {
         return method.invoke(null, arrayOf("sh", "-c", command), null, null) as Process
     }
 
+    /**
+     * 以 shell 身份执行命令并读取**原始字节** stdout（用于 `screencap -p -d <id>` 这类二进制输出）。
+     *
+     * 与 [exec] 的区别：不做按行读取（会把 PNG 破坏成乱码），stderr 只保留文本用于报错。
+     */
+    suspend fun execBytes(command: String, timeoutMs: Long = 25_000): ByteArray = withContext(Dispatchers.IO) {
+        check(available()) { "Shizuku 未安装或未启动：请先安装 Shizuku 并启动服务" }
+        check(granted()) { "Shizuku 未授权：请在「设置 → 扩展能力」里点「申请 Shizuku 授权」" }
+        val process = newShellProcess(command)
+        val out = java.io.ByteArrayOutputStream()
+        val err = StringBuilder()
+        val tOut = Thread {
+            runCatching { process.inputStream.use { input -> input.copyTo(out, 64 * 1024) } }
+        }.apply { isDaemon = true; start() }
+        val tErr = Thread {
+            runCatching { process.errorStream.bufferedReader().forEachLine { err.appendLine(it) } }
+        }.apply { isDaemon = true; start() }
+        val deadline = System.currentTimeMillis() + timeoutMs
+        var code = -1
+        while (System.currentTimeMillis() < deadline) {
+            code = runCatching { process.exitValue() }.getOrDefault(-1)
+            if (code >= 0) break
+            Thread.sleep(60)
+        }
+        if (code < 0) {
+            runCatching { process.destroy() }
+            throw java.io.IOException("命令超时（${timeoutMs}ms）：${command.take(120)}")
+        }
+        tOut.join(1500)
+        tErr.join(500)
+        if (code != 0) {
+            throw java.io.IOException("命令退出码 $code：${err.toString().trim().take(500).ifBlank { command.take(160) }}")
+        }
+        out.toByteArray()
+    }
+
     /** 便捷：截屏到应用缓存并返回文件路径。 */
     suspend fun screenshot(cacheDir: File, name: String = "shot-${System.currentTimeMillis()}.png"): String? {
         val target = File(cacheDir, name)
