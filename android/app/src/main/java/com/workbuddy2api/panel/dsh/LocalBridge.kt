@@ -102,7 +102,7 @@ object LocalBridge {
 
         return try {
             when (action) {
-                "status" -> 200 to vdisplayState(VirtualScreen.refresh(context)).toString()
+                "status" -> 200 to vdisplayState(kotlinx.coroutines.runBlocking { VirtualScreen.validate(context) }).toString()
                 "start" -> {
                     val width = req.optInt("width", 720).coerceIn(240, 2560)
                     val height = req.optInt("height", 1280).coerceIn(240, 2560)
@@ -134,7 +134,7 @@ object LocalBridge {
                 }
                 "shot" -> {
                     val shot = kotlinx.coroutines.runBlocking { VirtualScreen.shot(context) }
-                        ?: return fail(200, "截图失败：虚拟屏未开启、Shizuku 未授权，或 screencap 不支持 -d")
+                        ?: return fail(200, "截图失败：虚拟屏未开启，或还没有产生画面（先启动一个 App）")
                     200 to JSONObject()
                         .put("ok", true)
                         .put("path", shot.path)
@@ -198,11 +198,11 @@ object LocalBridge {
         if (info != null) json.put("display", vdisplayDisplay(info))
         val error = when {
             st is VirtualScreen.State.Failed -> st.message
-            st is VirtualScreen.State.Unsupported -> "需要 Android 10+（API 29）"
-            !VirtualScreen.shizukuGranted() -> "Shizuku 未安装或未授权"
+            st is VirtualScreen.State.Unsupported -> "需要 Android 8+（API 26）"
             else -> ""
         }
         json.put("ok", error.isEmpty())
+        json.put("input", JSONObject().put("shizuku", VirtualScreen.shizukuGranted()))
         if (error.isNotEmpty()) json.put("error", error)
         return json
     }

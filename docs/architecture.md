@@ -133,30 +133,36 @@ dsh-home/dshhome/cordis.patch.yml 的 insert 行（id: wb-mobile）
 设计与取舍见 [mobile-agent-plugin.md](mobile-agent-plugin.md)；离线自检：
 `node android/dsh/tests/wb-mobile.selftest.mjs`。
 
-### 4.6 虚拟屏（`vdisplay/VirtualScreen.kt`）
+### 4.6 虚拟屏（`vdisplay/VirtualScreen.kt` + `android/vds-helper`）
 
-给 Agent 一块不对应物理屏幕的 Android 显示，用户继续使用真机：
+给 Agent 一块不对应物理屏幕的 Android 显示，用户继续使用真机。3.13.1 起由
+**shell/root 侧的 `app_process` 服务**创建并持有显示：
 
 ```
-settings put global overlay_display_devices "720x1280/320"   ← ShizukuShell（uid 2000）
-        │ DisplayManager 轮询 / screencap 反查 displayId
+App ──Shizuku(uid 2000/root)──> app_process -Djava.class.path=files/vds.dex \
+        /system/bin com.wb.vds.Server W H DPI cache/vds
+        │ 创建 VirtualDisplay(PUBLIC | OWN_CONTENT_ONLY) → ImageReader
+        │ 写 cache/vds/{id,pid,meta} + frame.png（约 3fps）
         ▼
-am start --display <id> -n pkg/act     启动目标 App 到虚拟屏
-input -d <id> tap|swipe|text|keyevent  注入触摸/文字（不影响真机焦点）
-screencap -d <id> -p                   截图 → cache/vdisplay/latest.png
-settings delete global overlay_display_devices   关闭并恢复用户原值
+am force-stop <pkg>; am start --display <id> -n '<pkg>/<activity>'   同一 uid，先清旧任务再启动；2s 后核对 Display #
+dumpsys activity activities / Display #N   核对目标包实际落在哪块屏，落在 display 0 则报「不支持副屏」
+input -d <id> tap|swipe|text|keyevent           同一 uid，注入不影响真机焦点
 ```
 
-- 能力层 `VirtualScreen` 暴露 `state: StateFlow`、`start/stop/refresh`、`capture/shot`、
-  `tap/swipe/key/text`、`apps/launch`；所有命令经 `ShizukuShell.exec/execBytes` 执行。
-- displayId 优先用 `DisplayManager.getDisplays()` 里名字含 `Overlay` 的显示；
-  定制 ROM 不暴露时逐个 `screencap -d N` 用 PNG 尺寸反查，并把结果缓存到 SharedPreferences。
-- 创建前的 `overlay_display_devices` 原值写入 prefs，关闭时原样恢复，避免污染开发者选项。
+- 能力层 `VirtualScreen` 暴露 `state: StateFlow`、`start/stop/validate`、`readFrame/shot`、
+  `tap/swipe/key/text`、`apps/launch`；所有外部命令经 `ShizukuShell.exec` 执行。
+- **为什么必须 shell/root**：Android 17 的 `SecurityManagerService.isVirtualDisplayActive`
+  拒绝普通 App 把其他 App 启动到自建虚拟屏；服务成为 display owner 后，
+  `am start --display` 才被允许，同时不会触发 HyperOS 的跨应用「应用跳转」确认。
+- 截图不再 `screencap -d`：服务直接写 `frame.png`，App 读自己的缓存（旧实现的逻辑 id
+  在 Android 17 上会报 `Display Id is not valid`）。
+- `validate` 读 `pid` 并 `kill -0`，服务已死则清掉 `id/frame`，避免「运行中」假状态；
+  服务独立于 App 进程，点「关闭虚拟屏」会 `pkill` 服务。
 - UI：`ui/vdisplay/VirtualScreenScreen.kt`（设置 → 虚拟屏）；DSH 插件工具
   `wb_vdisplay/wb_vscreen/wb_vinput` 经宿主桥 `POST /vdisplay` 调用；
   原生助手 `MobileTools` 直接调用同一对象。
-- 约束：Android 10+ 且 Shizuku 授权；`FLAG_SECURE` 页面截图黑屏；单实例 App 会在真机/虚拟屏之间搬窗口。
-  详见 [virtual-display.md](virtual-display.md)。
+- 约束：Android 8+ 且 Shizuku 已授权；`FLAG_SECURE` 页面截图黑屏；单实例 App 会在
+  真机/虚拟屏之间搬窗口。详见 [virtual-display.md](virtual-display.md)。
 
 ---
 

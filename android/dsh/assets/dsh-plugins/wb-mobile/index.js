@@ -480,19 +480,21 @@ function notifyTool() {
   };
 }
 
-// ───────────────────────────── 虚拟屏（overlay display） ─────────────────────────────
+// ───────────────────────────── 虚拟屏（App-owned VirtualDisplay） ─────────────────────────────
 
 /**
- * 虚拟屏：系统里多出来一块不对应物理屏幕的显示（开发者选项「模拟辅助显示」同一机制）。
- * App 启动到那块屏上，Agent 用 input -d / screencap -d 操作，完全不影响用户的真实屏幕。
+ * 虚拟屏：由 WorkBuddy App 自己创建的一块 off-screen VirtualDisplay。
+ * 目标 App 用 ActivityOptions.setLaunchDisplayId 启动到这块屏上，Agent 用 input -d 操作，
+ * 画面由 ImageReader 直接取帧，完全不影响用户的真实屏幕。
  * 创建/销毁、找 displayId、截图落盘都由宿主（LocalBridge /vdisplay）完成，这里只做工具封装。
+ * 创建/截图/启动不需要 Shizuku；只有输入注入需要（uid 2000 的 INJECT_EVENTS）。
  */
 function vdisplayTool() {
   return {
     name: "wb_vdisplay",
     description:
       "Manage an Android off-screen virtual display so apps can be launched and driven without touching the user's real screen. " +
-      "Actions: status | start | stop | apps | launch. Requires Shizuku (shell uid).",
+      "Actions: status | start | stop | apps | launch. Requires Android 8+ and Shizuku: the virtual display is created by a shell/root app_process service, so creating, capturing, launching and input all go through Shizuku.",
     parameters: {
       type: "object",
       additionalProperties: false,
@@ -501,7 +503,7 @@ function vdisplayTool() {
         action: {
           type: "string",
           enum: ["status", "start", "stop", "apps", "launch"],
-          description: "status: query; start: create (default 720x1280/320); stop: restore the user's display setting; apps: list launchable packages; launch: start a package on the virtual display.",
+          description: "status: query; start: create (default 720x1280/320); stop: release the app-owned virtual display; apps: list launchable packages; launch: start a package on the virtual display.",
         },
         package: {
           type: "string",
@@ -607,7 +609,7 @@ function vinputTool() {
   return {
     name: "wb_vinput",
     description:
-      "Inject touch/text/key events into the virtual display (does not move the user's real screen cursor). " +
+      "Inject touch/text/key events into the virtual display (does not move the user's real screen cursor). Requires Shizuku (INJECT_EVENTS). " +
       "Coordinates use the virtual display's pixels, as returned by wb_vdisplay status / wb_vscreen.",
     parameters: {
       type: "object",
@@ -716,13 +718,14 @@ function environmentManual() {
     "- 默认策略：需要点击/输入 App 界面时，优先在虚拟屏里做，用户仍可正常使用真机；只有用户明确要求「操作我现在这个屏幕」时才直接动真机。",
     "- 用户说「别动我手机 / 后台帮我操作 / 用虚拟屏」时，必须先 start 虚拟屏，再启动目标 App 操作。",
     "- 创建：先 await tools.wb_vdisplay({ action: \"status\" }) 看是否已经 on；未开启再 { action: \"start\" }。默认 720x1280/320，可传 width/height/dpi；返回 JSON 里的 display.id / display.width / display.height 是后续坐标基准。",
-    "- 状态与关闭：{ action: \"status\" }、{ action: \"stop\" }。stop 会把系统「模拟辅助显示」设置恢复成创建前的值；任务结束先问用户要不要关。",
-    "- 列出可启动应用：{ action: \"apps\" }（返回 package + label，最多 400 个）。启动：{ action: \"launch\", package: \"com.xxx\" }。",
+    "- 状态与关闭：{ action: \"status\" }、{ action: \"stop\" }。虚拟屏由 App 自己持有，stop 只是释放它（不改系统设置）；任务结束先问用户要不要关。",
+    "- 列出可启动应用：{ action: \"apps\" }（返回 package + label，最多 400 个）。启动：{ action: \"launch\", package: \"com.xxx\" }。启动要求 WorkBuddy 在前台（后台启动会被 Android 拦下），失败时先让用户打开 App。",
     "- 看画面：await tools.wb_vscreen({ description: \"capture virtual screen\" }) → path（PNG，应用缓存 vdisplay/latest.png）。如果模型支持图像，用 read 打开这个路径再决定坐标；不支持就按用户描述/已知布局点。",
     "- 操作：await tools.wb_vinput({ action: \"tap\", x: 360, y: 640, description: \"tap login\" })；swipe 传 x1/y1/x2/y2/durationMs；key 传 code（4 返回、3 桌面、66 回车、187 最近任务）；text 传 text。",
     "- 文字：ASCII 走 input text 最可靠；中文/emoji 走「剪贴板 + KEYCODE_PASTE」兜底，个别 App 会拦截粘贴，失败就换成点击候选词/键盘输入。",
-    "- 失败语义：返回 shizuku unavailable → 让用户到「设置 → 扩展能力」授权 Shizuku（创建虚拟屏、输入注入都要求 uid 2000）；返回 needs Android 10+ → 这台机器不支持该能力。",
-    "- 虚拟屏不可用（Shizuku 未授权 / Android 10 以下）时，不要卡住：告诉用户原因，并询问是否改用真机操作（无障碍通道）。",
+    "- 依赖：虚拟屏由 Shizuku 侧的 app_process 服务创建，创建、截图、启动 App、输入都需要 Shizuku（uid 2000，KernelSU/Magisk 为 root）。Android 8 以下不支持虚拟屏。",
+    "- 失败语义：wb_vinput 返回 shizuku unavailable → 让用户到「设置 → 扩展能力」授权 Shizuku；wb_vdisplay 返回 needs Android 8+ → 这台机器不支持。",
+    "- 虚拟屏启动失败（尤其是后台启动限制）时不要卡住：让用户先把 WorkBuddy 切到前台，或询问是否改用真机操作（无障碍通道）。",
     "- 注意：虚拟屏与真机是同一套应用数据（同一个 App、同一个账号）。单实例应用可能把已有窗口从真机移到虚拟屏，动手前先提醒用户；不要用虚拟屏做支付、转账等敏感操作。",
     "",
     "### 其它",

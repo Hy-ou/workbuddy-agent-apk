@@ -145,15 +145,7 @@ fun DshScreen(
             Box(
                 Modifier
                     .weight(1f)
-                    .fillMaxWidth()
-                    // 全屏时页面顶到 0，避让挖孔/刘海；无开孔机型该 inset 为 0，仍是整屏。
-                    .then(
-                        if (immersive) {
-                            Modifier.windowInsetsPadding(WindowInsets.displayCutout)
-                        } else {
-                            Modifier
-                        },
-                    ),
+                    .fillMaxWidth(),
             ) {
                 DshContent(
                     manager = manager,

@@ -57,7 +57,7 @@ object MobileTools {
 12. {"tool":"vtype","text":"你好"} —— 在虚拟屏当前输入框输入文字（中文走剪贴板粘贴，个别 App 可能不生效）。
 13. {"tool":"vswipe","x1":360,"y1":1000,"x2":360,"y2":400} / {"tool":"vkey","code":"back"} —— 滑动 / 按键（back/home/enter/recents/menu）。
 虚拟屏与真机共用同一套应用数据；单实例 App 可能把窗口从真机移到虚拟屏，操作前先告诉用户。
-虚拟屏不可用时（Shizuku 未授权 / Android 10 以下）改用真机工具（screen/tap/…），不要卡住。
+虚拟屏由 Shizuku 侧的 app_process 服务创建，创建/截图/启动/输入都依赖 Shizuku；Android 8 以下无虚拟屏，改用真机工具（screen/tap/…）。
 任务结束后询问用户是否 {"tool":"vdisplay","action":"stop"} 关闭虚拟屏。
 
 【规则】
@@ -177,7 +177,7 @@ object MobileTools {
                             "${st.info.width}x${st.info.height}@${st.info.densityDpi}dpi",
                     )
                     is VirtualScreen.State.Failed -> failure(st.message)
-                    is VirtualScreen.State.Unsupported -> failure("这台设备不支持虚拟屏（需要 Android 10+）")
+                    is VirtualScreen.State.Unsupported -> failure("这台设备不支持虚拟屏（需要 Android 8+）")
                     else -> failure("虚拟屏启动失败")
                 }
             }
@@ -186,13 +186,13 @@ object MobileTools {
                 is VirtualScreen.State.Failed -> failure(st.message)
                 else -> failure("关闭虚拟屏失败")
             }
-            else -> when (val st = VirtualScreen.refresh(context)) {
+            else -> when (val st = VirtualScreen.validate(context)) {
                 is VirtualScreen.State.On -> success(
                     "虚拟屏运行中：displayId=${st.info.displayId}，" +
                         "${st.info.width}x${st.info.height}@${st.info.densityDpi}dpi",
                 )
                 is VirtualScreen.State.Failed -> failure(st.message)
-                is VirtualScreen.State.Unsupported -> failure("这台设备不支持虚拟屏（需要 Android 10+）")
+                is VirtualScreen.State.Unsupported -> failure("这台设备不支持虚拟屏（需要 Android 8+）")
                 else -> failure("虚拟屏未开启：先调用 {\"tool\":\"vdisplay\",\"action\":\"start\"}")
             }
         }
@@ -201,7 +201,7 @@ object MobileTools {
     private suspend fun vlaunch(context: Context, command: JsonObject): String {
         val pkg = command.string("package") ?: command.string("pkg") ?: command.string("app")
             ?: return failure("vlaunch 需要 package（应用包名）")
-        VirtualScreen.refresh(context)
+        VirtualScreen.validate(context)
         return VirtualScreen.launch(context, pkg).fold(
             { success(it) },
             { failure(it.message ?: "启动失败") },
@@ -209,7 +209,7 @@ object MobileTools {
     }
 
     private suspend fun vscreen(context: Context): String {
-        VirtualScreen.refresh(context)
+        VirtualScreen.validate(context)
         val shot = VirtualScreen.shot(context)
             ?: return failure("虚拟屏截图失败：确认虚拟屏已开启且 Shizuku 已授权")
         return success("虚拟屏截图：${shot.path}（${shot.width}x${shot.height}）")
@@ -218,7 +218,7 @@ object MobileTools {
     private suspend fun vtap(context: Context, command: JsonObject): String {
         val x = command.int("x") ?: return failure("vtap 需要 x 坐标")
         val y = command.int("y") ?: return failure("vtap 需要 y 坐标")
-        VirtualScreen.refresh(context)
+        VirtualScreen.validate(context)
         return VirtualScreen.tap(context, x, y).fold(
             { success("已在虚拟屏点击 ($x, $y)") },
             { failure(it.message ?: "点击失败") },
@@ -231,7 +231,7 @@ object MobileTools {
         val x2 = command.int("x2") ?: return failure("vswipe 需要 x2")
         val y2 = command.int("y2") ?: return failure("vswipe 需要 y2")
         val ms = command.int("durationMs") ?: 300
-        VirtualScreen.refresh(context)
+        VirtualScreen.validate(context)
         return VirtualScreen.swipe(context, x1, y1, x2, y2, ms).fold(
             { success("已在虚拟屏滑动 ($x1,$y1) → ($x2,$y2)") },
             { failure(it.message ?: "滑动失败") },
@@ -240,7 +240,7 @@ object MobileTools {
 
     private suspend fun vtype(context: Context, command: JsonObject): String {
         val text = command.string("text") ?: return failure("vtype 需要 text")
-        VirtualScreen.refresh(context)
+        VirtualScreen.validate(context)
         return VirtualScreen.text(context, text).fold(
             { success("已在虚拟屏输入：$text") },
             { failure(it.message ?: "输入失败") },
@@ -256,7 +256,7 @@ object MobileTools {
             "menu" -> 82
             else -> null
         } ?: return failure("vkey 需要 code（4/3/66/187/82 或 back/home/enter/recents/menu）")
-        VirtualScreen.refresh(context)
+        VirtualScreen.validate(context)
         return VirtualScreen.key(context, code).fold(
             { success("已发送按键 $code") },
             { failure(it.message ?: "按键失败") },

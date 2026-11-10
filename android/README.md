@@ -130,6 +130,22 @@ cd android && gradle test
 
 ## 变更记录
 
+- **3.13.2（2026-11-10）**：修复虚拟屏「启动应用不生效」。启动前 `am force-stop` 目标包，
+  再 `am start --display`；2 秒后解析 `dumpsys activity activities` 的 `Display #` 段落核对
+  任务落点，只有落在虚拟屏才返回成功。微信等启动后由自身进程把界面拉回真机（display 0）的
+  App 现在会明确报错并在控制台常驻显示，不再假成功。版本 3.13.2 / versionCode 31；
+  58 tests / lint 0。详见 [../docs/virtual-display.md](../docs/virtual-display.md)。
+
+- **3.13.1（2026-11-10）**：修复虚拟屏在 Android 17/HyperOS 上无法启动 App。虚拟屏改由
+  Shizuku 侧 `app_process` 服务（`android/vds-helper` → `assets/vds.dex`）创建并持有
+  `VirtualDisplay`，服务写 `id/pid/meta/frame.png` 到 App 缓存；启动 App 用同一 uid 的
+  `am start --display`，不再被 `SecurityManagerService.isVirtualDisplayActive` 或 HyperOS
+  「应用跳转」确认拦截；截图改为读 PNG 帧，不再 `screencap -d`（旧逻辑 id 在 Android 17 报
+  `Display Id is not valid`）。`validate` 用 `kill -0 <pid>` 清理服务死后的残留状态。
+  同时去掉 DSH 全屏 WebView 的 `WindowInsets.displayCutout` 内边距，修复顶部黑边。
+  版本 3.13.1 / versionCode 30；58 tests / lint 0。详见
+  [../docs/virtual-display.md](../docs/virtual-display.md)。
+
 - **3.13.0（2026-11-10）**：安卓虚拟屏。新增 `vdisplay/VirtualScreen`：经 Shizuku 创建系统级
   overlay display（`settings put global overlay_display_devices`），支持 `screencap -d` 截图、
   `input -d` 触摸/文字/按键、`am start --display` 启动应用到虚拟屏；关闭时恢复创建前的系统设置。

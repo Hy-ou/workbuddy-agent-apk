@@ -63,19 +63,20 @@
   并把「这台手机有什么」写成 system prompt 里的环境手册，避免 Agent 反复调用不存在的 bash。
   详见 [docs/mobile-agent-plugin.md](docs/mobile-agent-plugin.md)。
 - **全屏沉浸控制台**：进入 DSH 页默认隐藏 App 顶栏与底部 6 Tab，并隐藏系统状态栏/手势条，
-  控制台占满整屏（自动避让挖孔/刘海）；顶部居中浮动「退出全屏」按钮，一点即回到 App 界面，
+  控制台占满整屏（页面顶到 y=0，不再给挖孔留黑边）；顶部居中浮动「退出全屏」按钮（避让挖孔），一点即回到 App 界面，
   顶栏的「全屏使用」按钮可随时再进入，返回键优先退出全屏。
 
 ### 虚拟屏（Agent 后台操作，不影响真机）
-- 系统里多出一块**不对应物理屏幕**的显示（overlay display），Agent 把 App 启动到这块屏上操作，
-  你的真机屏幕照常使用，两边互不干扰。
-- 「设置 → 虚拟屏」提供控制台：开启/关闭、三种预设分辨率、实时画面（可关自动刷新）、
-  点画面远程点按、文字/返回/桌面注入、应用搜索与一键启动；关闭时把系统
-  `overlay_display_devices` 恢复成创建前的值。
+- 由 **Shizuku 侧的 `app_process` 服务**创建并持有一块 off-screen VirtualDisplay
+  （shell/root 是 display owner），Agent 把 App 启动到这块屏上操作，真机屏幕照常使用，两边互不干扰。
+- 「设置 → 虚拟屏」提供控制台：开启/关闭、三种预设分辨率、实时画面（1.5s 自动刷新，可关）、
+  点画面远程点按、文字/返回/桌面注入、应用搜索与一键启动。服务把最新帧写回 App 缓存，
+  不依赖 `screencap`，也不改任何系统设置。
 - DSH 工具：`wb_vdisplay`（status/start/stop/apps/launch）、`wb_vscreen`（截图）、
   `wb_vinput`（tap/swipe/key/text）；原生助手也提供同名能力。
-- 前置：Android 10+ 且 Shizuku 已授权。限制（单实例应用、FLAG_SECURE 黑屏等）见
-  [docs/virtual-display.md](docs/virtual-display.md)。
+- 启动会先结束该 App 在真机上的实例，再在虚拟屏重新打开，并在 2 秒后核对任务实际落点；微信等拒绝副屏的 App 会明确报错，不再假成功。
+- 前置：Android 8+ 且 Shizuku 已授权（创建/截图/启动/输入都走它）。限制（单实例应用、
+  FLAG_SECURE 黑屏、服务生命周期等）见 [docs/virtual-display.md](docs/virtual-display.md)。
 
 ### 界面预览
 
@@ -157,7 +158,7 @@ cd android
 | 项 | 版本 |
 |---|---|
 | 应用包名 | `com.workbuddy2api.panel` |
-| 应用版本 | **3.13.0**（versionCode 29） |
+| 应用版本 | **3.13.2**（versionCode 31） |
 | minSdk / targetSdk / compileSdk | 24 / 35 / 35 |
 | Kotlin | 2.0.21 |
 | AGP / Gradle | 8.7.3 / 8.10.2 |
@@ -206,7 +207,7 @@ workbuddy-agent-apk/
         │   │   └── agent/                ← 原生助手：会话、模型、SSE 客户端
         │   ├── agent/                    ← 无障碍服务与手机工具
         │   ├── dsh/                      ← DSH 进程管理、文件访问权限
-        │   ├── vdisplay/                 ← 虚拟屏（overlay display + Shizuku）
+        │   ├── vdisplay/                 ← 虚拟屏（Shizuku 侧 app_process 服务 + PNG 帧）
         │   ├── util/                     ← 格式化、URL 等工具
         │   └── ui/
         │       ├── theme/ components/ state/
@@ -273,7 +274,7 @@ adb shell am start -n com.workbuddy2api.panel/.MainActivity --ei tab 2 --es mode
 1. 安装并启动 [Shizuku](https://shizuku.rikka.app/)，在「设置 → 扩展能力」授权；
 2. 打开「设置 → 虚拟屏 → 虚拟屏控制台」，选分辨率后点「开启虚拟屏」；
 3. 画面区可实时预览并点按；也可以直接对 DSH 说「用虚拟屏帮我操作 XX App」；
-4. 用完点「关闭虚拟屏」，系统设置会恢复原状。
+4. 用完点「关闭虚拟屏」会结束 shell/root 侧服务（不改系统设置）；服务独立于 App，App 退出后虚拟屏仍在。
 完整原理、工具调用与限制见 [docs/virtual-display.md](docs/virtual-display.md)。
 
 ---
@@ -297,7 +298,9 @@ adb shell am start -n com.workbuddy2api.panel/.MainActivity --ei tab 2 --es mode
 | 3.9.3 | 修复 `spawn pnpm EACCES`（PATH 首位固定 `home/bin`） |
 | 3.10.0 | 内置 DSH 插件 `@workbuddy/dsh-mobile`：`wb_sh`/`wb_env`/`wb_shizuku`/`wb_notify` + Android 环境手册；`bash` 兜底到 mksh |
 | 3.12.0 | DSH 控制台全屏沉浸（隐藏顶栏/底部导航/系统栏，浮动退出按钮）；WebView 与轮询层掉帧优化 |
-| 3.13.0 | 安卓虚拟屏：Agent 在后台 overlay display 里启动/操作 App，不影响真机；控制台预览与点按、DSH/原生助手工具 |
+| 3.13.0 | 安卓虚拟屏首版：后台显示里启动/操作 App，控制台预览与点按、DSH/原生助手工具 |
+| 3.13.1 | 虚拟屏改用 Shizuku 侧 app_process 服务（修复 Android 17 无法在自建虚拟屏启动其他 App、截图 ID 错误）；DSH 全屏去掉顶部黑边 |
+| 3.13.2 | 修复虚拟屏「启动应用不生效」：force-stop 后重建任务、核对任务落点；微信等拒绝副屏的 App 明确报错 |
 
 ---
 

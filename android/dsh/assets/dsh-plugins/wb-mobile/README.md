@@ -26,9 +26,9 @@ WorkBuddy 一体化 APK 内置的 DSH 插件：给 Android 上的 DSH 内核补�
 | `wb_env` | 环境体检 | 一次给出可用/不可用命令、PATH、工具链清单、共享存储可写性、宿主桥与 Shizuku 状态 |
 | `wb_shizuku` | 以 uid 2000 执行 | 经宿主回环桥 `POST /shell` 转发到 `ShizukuShell.exec`；用于 `pm`/`input`/`screencap`/`settings`/`dumpsys` |
 | `wb_notify` | 系统通知 | 经回环桥 `POST /notify`，长任务结束时提醒用户 |
-| `wb_vdisplay` | 虚拟屏管理 | `POST /vdisplay`：status / start / stop / apps / launch；创建一块不影响真机的 overlay 显示 |
-| `wb_vscreen` | 虚拟屏截图 | `screencap -d <id> -p` → `cache/vdisplay/latest.png`，返回路径、分辨率与 displayId |
-| `wb_vinput` | 虚拟屏输入 | `input -d <id> tap/swipe/key/text`，坐标用虚拟屏像素；中文走剪贴板粘贴兜底 |
+| `wb_vdisplay` | 虚拟屏管理 | `POST /vdisplay`：status / start / stop / apps / launch；由 Shizuku 侧 app_process 服务创建不影响真机的 VirtualDisplay |
+| `wb_vscreen` | 虚拟屏截图 | 复制服务写出的 `cache/vds/frame.png` → `cache/vdisplay/latest.png`，返回路径、分辨率与 displayId |
+| `wb_vinput` | 虚拟屏输入 | `input -d <id> tap/swipe/key/text`，与服务同一 uid；中文走剪贴板粘贴兜底 |
 
 ### 系统提示词段
 

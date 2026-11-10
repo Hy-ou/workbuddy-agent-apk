@@ -1,120 +1,121 @@
-# 安卓虚拟屏（Virtual Display）
+# 安卓虚拟屏（Agent 后台操作，不影响真机）
 
-> 从 **3.13.0** 开始，WorkBuddy 可以让 Agent 在一块**不对应物理屏幕**的 Android 显示里运行 App，
-> 用户继续使用真机屏幕，两边互不干扰。
+> 版本：3.13.1 / versionCode 30 起。旧的「overlay display / App 自建 VirtualDisplay」实现已在
+> 3.13.1 被替换，原因见「为什么必须由 shell/root 创建」。
 
 ## 1. 它是什么
 
-系统里多出一块 off-screen 显示（开发者选项里的「模拟辅助显示」用的同一机制），
-由 App 创建、由 Agent 操作：
+虚拟屏是一块**不对应物理屏幕**的 Android 显示。Agent 可以把目标 App 启动到这块显示上，
+用截图 + 点按/滑动/文字驱动它，而用户的真实屏幕保持原样，可以继续刷视频、聊天、锁屏。
+
+控制台入口：**设置 → 虚拟屏 → 虚拟屏控制台**。
+
+## 2. 架构（3.13.1）
 
 ```
-┌──────────── 真机主屏（用户在用的） ────────────┐      ┌──── 虚拟屏（Agent 在用） ────┐
-│ 微信 / 抖音 / 浏览器 …                          │      │ 目标 App 的另一个窗口          │
-│ 用户触摸、输入，完全不受影响                     │      │ input -d <id> 注入触摸/文字    │
-└─────────────────────────────────────────────────┘      └───────────────────────────────┘
-                    ▲                                                  ▲
-                    │                                                  │
-              DisplayManager                                     Shizuku (uid 2000)
+WorkBuddy App (uid 10xxx)
+   │  ① 复制 assets/vds.dex 到 files/vds.dex
+   │  ② Shizuku 执行：
+   │     app_process -Djava.class.path=files/vds.dex /system/bin \
+   │       com.wb.vds.Server W H DPI cache/vds
+   ▼
+shell/root 侧 vds 服务（uid 2000 或 root，display owner）
+   │  创建 VirtualDisplay(PUBLIC | OWN_CONTENT_ONLY) → ImageReader
+   │  写 cache/vds/id、pid、meta、frame.png（约 3fps）
+   │
+   ├─ 启动 App：am force-stop <pkg>; am start --display <id> -n '<pkg>/<activity>'（同一 uid，2s 后核对 Display #）
+   └─ 输入注入：input -d <id> tap|swipe|keyevent|text（同一 uid）
+   ▼
+App 读 cache/vds/frame.png → Compose 预览；Agent 截图复制成 cache/vdisplay/latest.png
 ```
 
-- 创建/销毁：`settings put global overlay_display_devices "720x1280/320"`（关闭时恢复原值）；
-- 启动 App：`am start --display <id> -n <pkg>/<activity>`；
-- 触摸/文字：`input -d <id> tap|swipe|text|keyevent ...`；
-- 截图：`screencap -d <id> -p`（PNG 写到 `cache/vdisplay/latest.png`）。
+关键点：
 
-虚拟屏和真机**共用同一套应用数据**（同一个 Android 用户、同一个 App、同一个账号），
-不是第二台手机，也不是应用分身。
+- **显示 owner 与服务调用者是同一个 shell/root uid**，`am start --display` 因此既不会被
+  `ActivityTaskSupervisor` 的「虚拟屏限制」拒绝，也不会触发 HyperOS 的跨应用
+  「应用跳转」确认。
+- **截图不再用 `screencap -d`**：服务直接把 ImageReader 的最新帧写成 PNG，App 读自己的缓存。
+  旧实现用逻辑 displayId 调 `screencap -d` 在这台 Android 17 上会报
+  `Display Id 'x' is not valid`（它要的是 SurfaceFlinger 物理 ID）。
+- **不改任何系统设置**：不写 `overlay_display_devices`、不写 `force_desktop_mode`。
+- **服务独立于 App 进程**：App 退出/被杀后虚拟屏仍在；点「关闭虚拟屏」会 `pkill` 服务，
+  或重启手机自动消失。App 重进控制台时用 `kill -0 <pid>` 校验，服务已死则清掉残留状态。
 
-## 2. 前置条件
+### 为什么必须由 shell/root 创建
 
-| 条件 | 说明 |
-|---|---|
-| Android 10+（API 29） | `input -d` / `screencap -d` / `am --display` 的可用基线 |
-| Shizuku 已安装并授权 | 创建显示、注入事件、截图都要求 shell（uid 2000）；App 不能直接做 |
-| 目标 App 有桌面入口 | 「启动应用」列表来自 `MAIN/LAUNCHER`，没有桌面图标的 App 需要自己提供组件名 |
+Android 17 的 `ActivityTaskSupervisor` / `SecurityManagerService` 对虚拟屏有额外限制：
+普通 App 即使拥有自己创建的 VirtualDisplay，也不能把**别的 App** 启动到这块屏上
+（日志：`isVirtualDisplayActive caller=... target=...` → `Permission Denial ... launchDisplayId=`）。
+把显示 owner 换成 shell/root，并用同一 uid 的 `am start --display` 启动，才符合系统策略。
 
-未满足时：页面会给出「需要 Shizuku / 当前设备不支持」的提示，Agent 工具返回可读错误，不会静默失败。
+## 3. 前置条件
 
-## 3. 在 App 里使用
+- Android 8+（API 26；`am start --display` / `app_process`）。
+- **Shizuku 已安装、已启动并授权给 WorkBuddy**。普通设备是 shell（uid 2000）；
+  KernelSU/Magisk 环境下 Shizuku 以 root 运行，服务也是 root。
+- 创建、截图、启动、输入**全部**依赖 Shizuku；没有无障碍也能用虚拟屏。
 
-**设置 → 虚拟屏 → 虚拟屏控制台**
+## 4. 控制台
 
-1. 选择分辨率（720×1280 / 1080×1920 / 1280×800），点「开启虚拟屏」；
-2. 「画面」区每 1.5 秒自动截一帧，点画面 = 在虚拟屏对应坐标点一下（可用来扫码登录、点确认）；
-3. 「输入」区可以发送文字/返回/桌面；中文走剪贴板粘贴；
-4. 「在虚拟屏启动应用」里搜索并启动任意桌面 App；
-5. 用完点「关闭虚拟屏」——会把 `overlay_display_devices` 恢复成创建前的值。
+- 开启/关闭、三种预设：720×1280@320、1080×1920@420、1280×800@240。
+- 实时画面（1.5s 自动刷新，可关）：点画面 = 在虚拟屏对应坐标点一下（坐标自动换算）。
+- 文字注入（ASCII 走 `input text`；中文/emoji 走剪贴板 + `KEYCODE_PASTE` 兜底）、返回/桌面键。
+- 搜索并一键启动桌面 App；启动后等 1~2 秒看预览。
+- Shizuku 授权入口；关闭时释放服务与显示。
 
-> 画面右上角有「自动」开关：关掉后只在你点「刷新」时截屏，省电。
+## 5. Agent 工具
 
-## 4. Agent 怎么用
-
-### 4.1 DSH 内核（推荐）
-
-插件 `@workbuddy/dsh-mobile` 新增三个工具：
+DSH 插件 `@workbuddy/dsh-mobile`：
 
 | 工具 | 作用 |
 |---|---|
-| `wb_vdisplay` | `action: status / start / stop / apps / launch`；start 返回 `display.id/width/height` |
-| `wb_vscreen` | 截取虚拟屏 → `path`（PNG）+ 分辨率 + displayId |
-| `wb_vinput` | `action: tap / swipe / key / text`，坐标用虚拟屏像素 |
+| `wb_vdisplay` | `status / start / stop / apps / launch`，start 返回 displayId 与分辨率 |
+| `wb_vscreen` | 复制最新帧到 `cache/vdisplay/latest.png`，返回路径 + 尺寸 |
+| `wb_vinput` | `tap / swipe / key / text`，坐标用虚拟屏像素 |
 
-宿主桥新增 `POST /vdisplay`（127.0.0.1:7865，token 校验），插件只是薄封装。
-环境手册里新增「虚拟屏」一节，明确：
+原生助手：`vdisplay / vlaunch / vscreen / vtap / vswipe / vtype / vkey`。
+环境手册默认策略：需要点击/输入 App 界面时优先虚拟屏；只有用户明确要求
+「操作我现在这个屏幕」才动真机。
 
-- 用户说「别动我手机 / 后台操作」→ 先 `start`，把工作搬到虚拟屏；
-- 坐标以 `display.width/height` 为准；先 `wb_vscreen` 再点；
-- 任务结束先问用户是否 `stop`；
-- 单实例 App 可能把窗口从真机移走，动手前提醒用户；
-- 不做支付/转账类操作。
+## 6. 限制
 
-### 4.2 原生助手
+- 微信等 App 启动后由**自己的进程**拉起登录/主界面，内部 Intent 不带 launchDisplayId，会被系统放回真机（display 0）；这类 App 无法在虚拟屏运行，控制台会明确报错。
+- 单实例应用（微信等）同一时间只允许一个窗口：启动到虚拟屏后，真机上的同一窗口会被移走；
+  要两边同时用，优先选支持多窗口的应用。
+- `FLAG_SECURE` 页面（银行、支付、部分视频）截图是黑图。
+- 真机熄屏/深度休眠时虚拟屏可能停止合成；长任务保持充电、不清理后台。
+- **不要用虚拟屏做支付、转账、验证码轰炸等敏感操作**；虚拟屏里是真实账号。
+- 目标 App 自己再跳转的页面（如某些 License 检查打开 Play 商店）可能落到真机，
+  这是目标 App 的 Intent 行为，不是虚拟屏能拦截的。
 
-`MobileTools` 新增（不需要无障碍，但需要 Shizuku）：
+## 7. 排错
 
-```
-{"tool":"vdisplay","action":"start"}          // start / stop / status
-{"tool":"vlaunch","package":"com.tencent.mm"}
-{"tool":"vscreen"}
-{"tool":"vtap","x":360,"y":640}
-{"tool":"vswipe","x1":360,"y1":1000,"x2":360,"y2":400}
-{"tool":"vtype","text":"你好"}
-{"tool":"vkey","code":"back"}                  // back/home/enter/recents/menu
-```
-
-> 原生助手的「手机操作」开关现在只要**无障碍已连接或 Shizuku 已授权**任一成立就会启用；
-> 没有无障碍时虚拟屏工具可用，`screen/tap/type` 等真机工具会返回「无障碍服务未连接」。
-
-## 5. 限制与注意事项
-
-- **单实例 App**：微信等应用通常只允许一个任务实例；启动到虚拟屏后，真机上的同一 App 窗口会被移过去。
-  需要两边同时用，优先选声明了多显示器/多窗口支持的应用。
-- **FLAG_SECURE**：银行、支付、部分视频 App 会禁止截屏，`screencap` 得到黑图；这类 App 不要用虚拟屏自动化。
-- **关屏/深度休眠**：真机熄屏后 SurfaceFlinger 可能停止合成 overlay 显示，截图会黑/失败；
-  长任务保持充电、不要清理后台（App 持有网关 wakelock，但不保证所有 ROM 都不冻结）。
-- **音频**：虚拟屏里播放的声音可能从扬声器出来，无法按显示隔离。
-- **安全**：虚拟屏里的操作是真实操作（真实账号、真实数据）。Agent 不应在虚拟屏里做支付、转账、删除等不可逆动作，
-  除非用户明确确认。
-- **系统设置副作用**：`overlay_display_devices` 是全局设置；App 记录了创建前的值并在关闭时恢复。
-  如果卸载 App 时虚拟屏仍开着，系统设置会保留，可在开发者选项里关掉，或执行
-  `settings delete global overlay_display_devices`。
-
-## 6. 排错
-
-| 现象 | 排查 |
+| 现象 | 处理 |
 |---|---|
-| 点「开启虚拟屏」报 Shizuku 未授权 | Shizuku 是否在运行；App 内「设置 → 扩展能力 → 申请授权」；部分 ROM 需要给 Shizuku 自启动 |
-| 开启成功但画面一直「等待首帧」 | `adb shell dumpsys display \| grep -i overlay` 看显示是否存在；确认 `screencap -d <id> -p` 能出图 |
-| 点按没反应 | 确认点击的是虚拟屏画面（坐标会按 display 分辨率换算）；部分页面需要先请求焦点 |
-| 启动 App 报 `Error: ...` | 该 App 没有可启动 Activity，或组件被禁用/未安装 |
-| 中文输入不生效 | 剪贴板粘贴被 App 拦截；换用页面上的键盘/候选词，或让真机用户代输 |
-| 关闭后虚拟屏还在 | 可能不是本 App 创建的（没有恢复记录）；执行 `settings delete global overlay_display_devices` |
+| 点「开启虚拟屏」提示需要 Shizuku | 安装/启动 Shizuku，并在「设置 → 扩展能力」授权；页面回前台会刷新状态 |
+| 启动后预览一直「等待首帧」 | 先启动一个 App；仍无帧则关闭再开启，或看 `cache/vds/log` |
+| App 启动后提示「系统把 xxx 放到了真机」 | 该 App 拒绝副屏（微信等），只能真机操作；换设置/KernelSU/Chrome 等支持副屏的 App |
+| App 启动失败（Permission Denial / launchDisplayId） | 确认 Shizuku 的 uid 是 2000 或 root；本机 KernelSU 下为 root。非 root 的 shell 在部分 ROM 仍可能被限制 |
+| 服务被杀后仍显示「运行中」 | 3.13.1 已用 pid + `kill -0` 校验；若仍异常，点「关闭虚拟屏」再开 |
+| 关屏后画面停住 | 解锁/点亮屏幕，长任务保持充电 |
+| 想彻底清理 | 关闭虚拟屏，或 `adb shell su -c 'pkill -f com.wb.vds.Server'` |
 
-## 7. 相关代码
+## 8. 服务源码与构建
 
-- `android/app/src/main/java/com/workbuddy2api/panel/vdisplay/VirtualScreen.kt` — 能力层（创建/截图/输入/启动）
-- `android/app/src/main/java/com/workbuddy2api/panel/ui/vdisplay/VirtualScreenScreen.kt` — 控制台 UI
-- `android/app/src/main/java/com/workbuddy2api/panel/dsh/LocalBridge.kt` — `POST /vdisplay`
-- `android/dsh/assets/dsh-plugins/wb-mobile/index.js` — `wb_vdisplay` / `wb_vscreen` / `wb_vinput`
-- `android/app/src/main/java/com/workbuddy2api/panel/agent/MobileTools.kt` — 原生助手工具
+- 源码：`android/vds-helper/src/com/wb/vds/Server.java`
+- 构建（Windows，JDK 17 + Android SDK 35）：
+
+```powershell
+cd android\vds-helper
+javac -encoding UTF-8 -source 8 -target 8 `
+  -cp "$env:ANDROID_HOME\platforms\android-35\android.jar" `
+  -d classes src\com\wb\vds\Server.java
+jar cf helper.jar -C classes .
+& "$env:ANDROID_HOME\build-tools\35.0.0\d8.bat" `
+  --lib "$env:ANDROID_HOME\platforms\android-35\android.jar" `
+  --min-api 26 --output out helper.jar
+Copy-Item out\classes.dex ..\app\src\main\assets\vds.dex -Force
+```
+
+服务用反射拿 `ActivityThread.systemMain()/getSystemContext()`（隐藏 API），
+因此只依赖公开的 `DisplayManager` / `ImageReader` / `VirtualDisplay`。

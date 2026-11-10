@@ -5,6 +5,66 @@
 
 ---
 
+## 3.13.2 — 2026-11-10
+
+### 修复：虚拟屏「启动应用不生效」
+
+- **根因 1**：真机上已有同 App 任务时，`am start --display <id>` 只会把旧任务带到前台，
+  仍留在 display 0；旧代码只看退出码，误报成功。
+- **根因 2**：微信等 App 启动后由自己的进程拉起登录页/主界面，这些内部 Intent 不带
+  launchDisplayId，系统把它们放回 display 0，虚拟屏无法拦截。
+- **修复**：`VirtualScreen.launch` 先 `am force-stop <pkg>`，再 `am start --display`；
+  等待 2 秒后读 `dumpsys activity activities`，按 `Display #N` 段落核对目标包实际落点。
+  只有任务在虚拟屏上才返回成功；落在真机/找不到任务时返回明确错误，并在控制台卡片下方
+  常驻显示 + Toast。UI 增加「启动会结束真机实例」的说明。
+- **实测（同一路径 `POST /vdisplay`）**：
+  - `start status` → `state: on, display 12, ok: true`
+  - 启动设置 → `ok: true, message: 已在虚拟屏启动 com.android.settings`
+  - 启动微信 → `ok: false, error: 系统把 com.tencent.mm 放到了真机（display 0）...`
+- 支持副屏的 App（设置、KernelSU、Chrome 等）正常；微信等拒绝副屏的 App 明确报错，不再假成功。
+- 版本 **3.13.2 / versionCode 31**；58 tests / lint 0。详见
+  [release/RELEASE_NOTES-3.13.2.md](release/RELEASE_NOTES-3.13.2.md)。
+
+---
+
+## 3.13.1 — 2026-11-10
+
+### 修复：虚拟屏在 Android 17 / HyperOS 上无法启动 App
+
+- **根因**：3.13.0 用 App 自建 VirtualDisplay / overlay display。Android 17 的
+  `SecurityManagerService.isVirtualDisplayActive` 明确拒绝普通 App 把**其他 App**
+  启动到虚拟屏（即使 App 是 display owner）；`screencap -d <逻辑 id>` 也报
+  `Display Id 'x' is not valid`（它要 SurfaceFlinger 物理 ID）；HyperOS 的跨应用
+  「应用跳转」确认还会因为无法显示在虚拟屏而直接失败。
+- **架构重写**：新增 `android/vds-helper`（`com.wb.vds.Server`，打包为
+  `assets/vds.dex`）。App 通过 Shizuku 以 uid 2000/root 执行
+  `app_process -Djava.class.path=... com.wb.vds.Server W H DPI cache/vds`：
+  - 服务创建 `VirtualDisplay(PUBLIC | OWN_CONTENT_ONLY)` 并成为 display owner；
+  - 服务写 `id/pid/meta/frame.png`（约 3fps）到 App 缓存；
+  - App 启动 App 用**同一 uid** 的 `am start --display <id> -n '<pkg>/<act>'`；
+  - 输入仍用 `input -d <id>`；
+  - 不再改 `overlay_display_devices` / `force_desktop_mode`，截图不再用 `screencap`。
+- **状态校验**：App 重进控制台时读 `pid` 并 `kill -0`，服务已死则清掉残留 `id/frame`，
+  不再出现「服务没了还显示运行中」；旧版残留（无 `pid`）同样清理。
+- **依赖**：虚拟屏创建/截图/启动/输入全部依赖 Shizuku（Android 8+）；控制台与工具提示同步更新。
+- **验证**：Redmi K90 Ultra（M332BF）/ Android 17 / KernelSU root + Shizuku root：
+  720×1280@320 → displayId 9、owner uid 0；KernelSU 在虚拟屏 `visible=true`，
+  `frame.png` 98 KB，控制台预览正常；杀服务后重进控制台回到「未开启」。
+- 详见 [docs/virtual-display.md](docs/virtual-display.md)。
+
+### 修复：DSH 全屏顶部黑边
+
+- 去掉全屏时 WebView 外层的 `WindowInsets.displayCutout` 内边距，页面顶到 y=0；
+  顶部浮动「退出全屏」按钮仍按 `statusBars ∪ displayCutout` 避让挖孔。
+
+### 版本
+
+- **3.13.1 / versionCode 30**；单元测试 58 项通过；`lintDebug` 0 error。
+- 新增 `android/vds-helper/src/com/wb/vds/Server.java` 与 `assets/vds.dex`（构建命令见
+  [docs/virtual-display.md](docs/virtual-display.md)）。
+
+---
+
 ## 3.13.0 — 2026-11-10
 
 ### 新增：安卓虚拟屏（Agent 后台操作，不影响真机）

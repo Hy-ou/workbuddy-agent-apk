@@ -1,7 +1,6 @@
 package com.workbuddy2api.panel.ui.vdisplay
 
 import android.graphics.Bitmap
-import android.graphics.BitmapFactory
 import androidx.compose.foundation.Image
 import androidx.compose.foundation.background
 import androidx.compose.foundation.gestures.detectTapGestures
@@ -101,11 +100,12 @@ fun VirtualScreenScreen(onBack: () -> Unit) {
     var auto by remember { mutableStateOf(true) }
     var shot by remember { mutableStateOf<Bitmap?>(null) }
     var shotAt by remember { mutableLongStateOf(0L) }
-    var captureError by remember { mutableStateOf("") }
+    var frameTick by remember { mutableIntStateOf(0) }
     var previewSize by remember { mutableStateOf(IntSize.Zero) }
     var inputText by remember { mutableStateOf("") }
     var apps by remember { mutableStateOf<List<VirtualScreen.AppEntry>>(emptyList()) }
     var appQuery by remember { mutableStateOf("") }
+    var launchError by remember { mutableStateOf("") }
     var shizukuGranted by remember { mutableStateOf(VirtualScreen.shizukuGranted()) }
     var shizukuAvailable by remember { mutableStateOf(VirtualScreen.shizukuAvailable()) }
 
@@ -114,26 +114,12 @@ fun VirtualScreenScreen(onBack: () -> Unit) {
     val preset = PRESETS[presetIndex.coerceIn(PRESETS.indices)]
 
     suspend fun refreshShot() {
-        // 每次取帧前同步一次显示状态：App 可能旋转屏幕，分辨率/displayId 会变。
-        VirtualScreen.refresh(context)
-        val bytes = VirtualScreen.capture(context)
-        if (bytes == null) {
-            captureError = if (!VirtualScreen.shizukuGranted()) {
-                "Shizuku 未授权，无法截图"
-            } else {
-                "截图失败：虚拟屏可能已被关闭，或 screencap 不支持 -d"
-            }
-            return
-        }
-        captureError = ""
-        val w = info?.width ?: 0
-        val bitmap = withContext(Dispatchers.Default) {
-            val opts = BitmapFactory.Options().apply { inSampleSize = if (w >= 900) 2 else 1 }
-            runCatching { BitmapFactory.decodeByteArray(bytes, 0, bytes.size, opts) }.getOrNull()
-        }
+        // 服务会把最新帧写成 cache/vds/frame.png，App 直接读，不用 screencap。
+        val bitmap = VirtualScreen.readFrame(context)
         if (bitmap != null) {
             shot = bitmap
-            shotAt = System.currentTimeMillis()
+            shotAt = VirtualScreen.latestFrameAt()
+            frameTick++
         }
     }
 
@@ -141,13 +127,19 @@ fun VirtualScreenScreen(onBack: () -> Unit) {
     DisposableEffect(lifecycleOwner) {
         val observer = LifecycleEventObserver { _, event ->
             if (event == Lifecycle.Event.ON_RESUME) {
-                VirtualScreen.refresh(context)
+                scope.launch { VirtualScreen.validate(context) }
                 shizukuAvailable = VirtualScreen.shizukuAvailable()
                 shizukuGranted = VirtualScreen.shizukuGranted()
             }
         }
         lifecycleOwner.lifecycle.addObserver(observer)
         onDispose { lifecycleOwner.lifecycle.removeObserver(observer) }
+    }
+
+    LaunchedEffect(Unit) {
+        VirtualScreen.validate(context)
+        shizukuAvailable = VirtualScreen.shizukuAvailable()
+        shizukuGranted = VirtualScreen.shizukuGranted()
     }
 
     LaunchedEffect(running) {
@@ -211,8 +203,8 @@ fun VirtualScreenScreen(onBack: () -> Unit) {
                             color = wb.ink,
                         )
                         Text(
-                            text = "系统级 overlay display（与开发者选项的「模拟辅助显示」同一机制），" +
-                                "对用户真实屏幕零占用。",
+                            text = "shell/root 侧服务创建的 off-screen VirtualDisplay（PNG 帧写回缓存），" +
+                                "对用户真实屏幕零占用，也不改写任何系统设置。",
                             style = MaterialTheme.typography.bodySmall,
                             color = wb.ink3,
                         )
@@ -237,9 +229,10 @@ fun VirtualScreenScreen(onBack: () -> Unit) {
                     Spacer(Modifier.height(10.dp))
                     Text(
                         text = if (!shizukuAvailable) {
-                            "需要 Shizuku：安装并启动 Shizuku 后回到这里授权。虚拟屏的创建、输入注入、截图都要求 uid 2000。"
+                            "虚拟屏由 shell/root 侧的 app_process 服务创建，创建、截图、启动应用、输入注入都依赖 Shizuku。" +
+                                "安装并启动 Shizuku 后回到这里授权。"
                         } else {
-                            "已检测到 Shizuku，但本应用还没授权。点右侧按钮完成授权。"
+                            "已检测到 Shizuku，但本应用还没授权。授权后才能开启虚拟屏（创建/截图/启动/输入都走它）。"
                         },
                         style = MaterialTheme.typography.bodySmall,
                         color = wb.warn,
@@ -300,13 +293,13 @@ fun VirtualScreenScreen(onBack: () -> Unit) {
                             scope.launch {
                                 when (val r = VirtualScreen.start(context, preset.width, preset.height, preset.dpi)) {
                                     is VirtualScreen.State.Failed -> error = r.message
-                                    is VirtualScreen.State.Unsupported -> error = "需要 Android 10+"
+                                    is VirtualScreen.State.Unsupported -> error = "需要 Android 8+"
                                     else -> toast("虚拟屏已就绪")
                                 }
                                 busy = ""
                             }
                         },
-                        enabled = busy.isEmpty() && VirtualScreen.supported(),
+                        enabled = busy.isEmpty() && VirtualScreen.supported() && VirtualScreen.shizukuGranted(),
                         primary = true,
                         modifier = Modifier.weight(1f),
                     )
@@ -365,14 +358,16 @@ fun VirtualScreenScreen(onBack: () -> Unit) {
                             contentAlignment = Alignment.Center,
                         ) {
                             Text(
-                                if (VirtualScreen.shizukuGranted()) "等待首帧…" else "Shizuku 未授权，无法截图",
+                                "等待首帧…（启动一个 App 后才有画面）",
                                 style = MaterialTheme.typography.bodySmall,
                                 color = wb.ink3,
                             )
                         }
                     } else {
                         Image(
-                            bitmap = bitmap.asImageBitmap(),
+                            // frameTick 变化会重建 ImageBitmap：底层 Bitmap 是复用的，
+                            // 不换包装层的话 Compose 会认为还是同一张图而不重绘。
+                            bitmap = remember(frameTick) { bitmap.asImageBitmap() },
                             contentDescription = "虚拟屏画面",
                             contentScale = ContentScale.FillBounds,
                             modifier = Modifier
@@ -419,10 +414,6 @@ fun VirtualScreenScreen(onBack: () -> Unit) {
                             modifier = Modifier.weight(1f),
                         )
                         WbButton("刷新", onClick = { scope.launch { refreshShot() } })
-                    }
-                    if (captureError.isNotBlank()) {
-                        Spacer(Modifier.height(6.dp))
-                        Text(captureError, style = MaterialTheme.typography.labelSmall, color = wb.warn)
                     }
                 }
             }
@@ -483,13 +474,19 @@ fun VirtualScreenScreen(onBack: () -> Unit) {
                 Spacer(Modifier.height(WbDimens.gap))
 
                 // ── 应用 ────────────────────────────────────────────
-                SectionHeader(title = "在虚拟屏启动应用", subtitle = "列出桌面可见的应用")
+                SectionHeader(title = "在虚拟屏启动应用", subtitle = "am start --display，由 shell/root 侧执行")
                 WbCard {
                     WbTextField(
                         value = appQuery,
                         onValueChange = { appQuery = it },
                         label = "搜索应用",
                         placeholder = "应用名或包名",
+                    )
+                    Spacer(Modifier.height(6.dp))
+                    Text(
+                        "启动会先结束该 App 在真机上的实例，再在虚拟屏重新打开；微信等拒绝副屏的 App 会提示不支持。",
+                        style = MaterialTheme.typography.labelSmall,
+                        color = wb.ink3,
                     )
                     Spacer(Modifier.height(6.dp))
                     val filtered = apps
@@ -535,6 +532,7 @@ fun VirtualScreenScreen(onBack: () -> Unit) {
                                 WbButton("启动", onClick = {
                                     scope.launch {
                                         val r = VirtualScreen.launch(context, app.packageName)
+                                        launchError = r.exceptionOrNull()?.message ?: ""
                                         toast(r.getOrElse { it.message ?: "启动失败" })
                                         delay(600)
                                         refreshShot()
@@ -542,6 +540,14 @@ fun VirtualScreenScreen(onBack: () -> Unit) {
                                 })
                             }
                         }
+                    }
+                    if (launchError.isNotBlank()) {
+                        Spacer(Modifier.height(8.dp))
+                        Text(
+                            launchError,
+                            style = MaterialTheme.typography.bodySmall,
+                            color = wb.bad,
+                        )
                     }
                 }
             }
@@ -552,8 +558,10 @@ fun VirtualScreenScreen(onBack: () -> Unit) {
             SectionHeader(title = "说明")
             WbCard {
                 Text(
-                    "• 虚拟屏是系统级显示，不占用你的屏幕；关掉页面后 Agent 仍可继续在虚拟屏里操作。\n" +
-                        "• 创建/关闭会改写系统设置 `overlay_display_devices`，关闭时恢复成创建前的值。\n" +
+                    "• 虚拟屏由 Shizuku 侧的 app_process 服务创建并持有，不改写任何系统设置；" +
+                        "服务独立于 App 进程，App 退出后虚拟屏仍在，直到你点「关闭虚拟屏」或重启手机。\n" +
+                        "• 创建、截图、启动应用、输入注入都需要 Shizuku（普通设备 uid 2000，KernelSU/Magisk 为 root）；" +
+                        "Android 8 以下不支持。\n" +
                         "• 部分单实例应用（微信等）在同一时间只允许一个窗口，启动到虚拟屏后真机上的窗口会被移走；" +
                         "需要两边同时用时，优先选支持多窗口的应用。\n" +
                         "• 关屏/深度休眠时虚拟屏可能停止渲染，长任务建议保持充电与不清理后台。\n" +
@@ -563,7 +571,7 @@ fun VirtualScreenScreen(onBack: () -> Unit) {
                     color = wb.ink3,
                 )
                 Spacer(Modifier.height(8.dp))
-                Mono("settings get global overlay_display_devices")
+                Mono("VirtualDisplay #${info?.displayId ?: "-"} · input -d ${info?.displayId ?: "ID"}")
             }
 
             Spacer(Modifier.height(24.dp))
