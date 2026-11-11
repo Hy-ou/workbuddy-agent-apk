@@ -97,10 +97,10 @@ libdshnode.so --expose-internals dshroot/lib/node_modules/@deepseek-ai/dsh/lib/b
 - 等 WebView **有实际尺寸**后再 `loadUrl`，避免 0×0 时初始化渲染视口；
 - 放行 `about/data/blob/javascript` 协议，实现 `onShowFileChooser`（附件），
   并注入视口修复脚本（见 [troubleshooting.md](troubleshooting.md#4-dsh-控制台按钮点击无反应)）。
-- **全屏沉浸（3.12.0）**：DSH Tab 默认隐藏 App 顶栏 / 底部导航与系统状态栏、手势条
-  （`WindowInsetsControllerCompat.hide(systemBars)` + `BEHAVIOR_SHOW_TRANSIENT_BARS_BY_SWIPE`），
-  WebView 按 `WindowInsets.displayCutout` 避让挖孔；顶部居中的「退出全屏」浮层恢复 App 界面，
-  顶栏「全屏使用」按钮再次进入；返回键先退出全屏。进出全屏只改变量约束，不重建 WebView。
+- **DSH 两种布局（3.13.3）**：默认标准布局（DSH 顶栏、底部 6 Tab、系统状态栏，同 3.11.x）；
+  点顶栏「全屏使用」进入沉浸全屏（`WindowInsetsControllerCompat.hide(systemBars)` +
+  `BEHAVIOR_SHOW_TRANSIENT_BARS_BY_SWIPE`，页面顶到 y=0），顶部「退出全屏」浮层恢复标准布局；
+  返回键先退出全屏。进出全屏只改变量约束，不重建 WebView。
 - **帧率约束**：视口修复只在视口尺寸变化时改高度（`ResizeObserver`），vh→px 全量换算仅首帧一次；
   WebView 用不透明底色 + `offscreenPreRaster`；页面底色回调直接改 View / 系统栏，不经 Compose 状态；
   release 包前端 console 日志按 300ms 限流；离开页面 `removeView + destroy`。

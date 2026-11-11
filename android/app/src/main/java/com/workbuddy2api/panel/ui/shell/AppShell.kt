@@ -97,14 +97,16 @@ fun AppShell(vm: AppViewModel, session: Session, repo: WbRepository, initialTab:
     var route by rememberSaveable { mutableStateOf(Route.Main) }
     var showGatewayLogs by remember { mutableStateOf(false) }
 
-    // 引擎在「设置 → 助手引擎」里切换；DSH 页默认全屏沉浸：隐藏顶栏与底部导航，
-    // 只留顶部一个「退出全屏」按钮回到 App 界面。
+    // DSH 页提供两种布局：
+    //   1) 标准布局：和以前一样，保留 DSH 顶栏、App 底部导航与系统状态栏；
+    //   2) 沉浸全屏：点 DSH 顶栏的「全屏使用」后隐藏上述内容，只留「退出全屏」浮层。
+    // 默认进入标准布局，不再自动全屏。
     val engine = initialMode.ifBlank { session.assistantMode }
     val dshActive = tab == 2 && engine == "dsh"
-    var dshImmersive by rememberSaveable { mutableStateOf(engine == "dsh") }
+    var dshImmersive by rememberSaveable { mutableStateOf(false) }
     LaunchedEffect(engine) {
-        // 切到 DSH 引擎时重新进入全屏；切回原生助手则恢复正常布局。
-        if (engine == "dsh") dshImmersive = true
+        // 切换引擎时回到标准布局；全屏只在本次 DSH 会话内由用户主动进入。
+        dshImmersive = false
     }
     val hideChrome = dshActive && dshImmersive
 

@@ -62,9 +62,9 @@
   （`wb_sh` = `/system/bin/sh`、`wb_shizuku` = Shizuku uid 2000、`wb_env` 体检、`wb_notify` 通知），
   并把「这台手机有什么」写成 system prompt 里的环境手册，避免 Agent 反复调用不存在的 bash。
   详见 [docs/mobile-agent-plugin.md](docs/mobile-agent-plugin.md)。
-- **全屏沉浸控制台**：进入 DSH 页默认隐藏 App 顶栏与底部 6 Tab，并隐藏系统状态栏/手势条，
-  控制台占满整屏（页面顶到 y=0，不再给挖孔留黑边）；顶部居中浮动「退出全屏」按钮（避让挖孔），一点即回到 App 界面，
-  顶栏的「全屏使用」按钮可随时再进入，返回键优先退出全屏。
+- **DSH 两种布局**：默认标准布局（保留 DSH 顶栏、底部 6 Tab 与系统状态栏，和以前一样）；
+  点 DSH 顶栏的「全屏使用」进入沉浸全屏（隐藏顶栏/底部导航/系统栏，页面顶到 y=0），
+  顶部居中浮动「退出全屏」按钮（避让挖孔）返回标准布局，返回键优先退出全屏。
 
 ### 虚拟屏（Agent 后台操作，不影响真机）
 - 由 **Shizuku 侧的 `app_process` 服务**创建并持有一块 off-screen VirtualDisplay
@@ -158,7 +158,7 @@ cd android
 | 项 | 版本 |
 |---|---|
 | 应用包名 | `com.workbuddy2api.panel` |
-| 应用版本 | **3.13.2**（versionCode 31） |
+| 应用版本 | **3.13.3**（versionCode 32） |
 | minSdk / targetSdk / compileSdk | 24 / 35 / 35 |
 | Kotlin | 2.0.21 |
 | AGP / Gradle | 8.7.3 / 8.10.2 |
@@ -301,6 +301,7 @@ adb shell am start -n com.workbuddy2api.panel/.MainActivity --ei tab 2 --es mode
 | 3.13.0 | 安卓虚拟屏首版：后台显示里启动/操作 App，控制台预览与点按、DSH/原生助手工具 |
 | 3.13.1 | 虚拟屏改用 Shizuku 侧 app_process 服务（修复 Android 17 无法在自建虚拟屏启动其他 App、截图 ID 错误）；DSH 全屏去掉顶部黑边 |
 | 3.13.2 | 修复虚拟屏「启动应用不生效」：force-stop 后重建任务、核对任务落点；微信等拒绝副屏的 App 明确报错 |
+| 3.13.3 | DSH 两种布局：默认标准（顶栏/底部导航/系统栏），点顶栏全屏按钮进入沉浸全屏；不再默认全屏 |
 
 ---
 

@@ -130,6 +130,12 @@ cd android && gradle test
 
 ## 变更记录
 
+- **3.13.3（2026-11-11）**：DSH 布局改为两种选择。默认标准布局（保留 DSH 顶栏、App 底部 6 Tab
+  与系统状态栏，和以前一样）；点 DSH 顶栏的「全屏使用」进入沉浸全屏（隐藏顶栏/底部导航/系统栏，
+  页面顶到 y=0），「退出全屏」浮层返回标准布局。`dshImmersive` 默认改为 `false`，删除切到
+  DSH 引擎强制全屏的逻辑。版本 3.13.3 / versionCode 32；58 tests / lint 0；已在
+  Redmi 25019PNF3C（Android 17）安装验证两种布局。详见 [../release/RELEASE_NOTES-3.13.3.md](../release/RELEASE_NOTES-3.13.3.md)。
+
 - **3.13.2（2026-11-10）**：修复虚拟屏「启动应用不生效」。启动前 `am force-stop` 目标包，
   再 `am start --display`；2 秒后解析 `dumpsys activity activities` 的 `Display #` 段落核对
   任务落点，只有落在虚拟屏才返回成功。微信等启动后由自身进程把界面拉回真机（display 0）的
