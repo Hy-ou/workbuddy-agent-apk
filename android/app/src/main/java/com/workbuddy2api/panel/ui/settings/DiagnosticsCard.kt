@@ -62,7 +62,17 @@ fun DiagnosticsCard(modifier: Modifier = Modifier) {
 
     val chromeMajor = remember {
         runCatching {
-            val wv = android.webkit.WebView(context)
+            // 只为取 UA 里的 Chromium 版本，但也要挂客户端：WebView 的「渲染进程死亡必须
+            // 被所有关联实例认领」是按实例算的，裸实例活着的那几百毫秒内照样能把整个 App
+            // 一起 abort（见 issue #4）。
+            val wv = android.webkit.WebView(context).apply {
+                webViewClient = object : android.webkit.WebViewClient() {
+                    override fun onRenderProcessGone(
+                        view: android.webkit.WebView,
+                        detail: android.webkit.RenderProcessGoneDetail,
+                    ): Boolean = true
+                }
+            }
             val major = DeviceEnv.chromeMajor(wv.settings.userAgentString)
             runCatching { wv.destroy() }
             major

@@ -5,6 +5,7 @@ import kotlinx.serialization.json.JsonArray
 import kotlinx.serialization.json.JsonObject
 import kotlinx.serialization.json.buildJsonObject
 import kotlinx.serialization.json.put
+import kotlinx.serialization.json.putJsonObject
 
 /**
  * 演示模式仓库：完整走一遍 UI，但不访问网络。
@@ -192,6 +193,49 @@ class DemoWbRepository(private val delayMs: Long = 120) : WbRepository {
             skipped = 1,
             errors = listOf("missing required fields (id=demo-3)"),
         )
+    }
+
+    override suspend fun exportAccount(uid: String): ExportResult {
+        tick()
+        val a = accounts.firstOrNull { it.uid == uid }
+            ?: return ExportResult("workbuddy-$uid.json", "[]\n", 0, 1)
+        return ExportResult(
+            fileName = "workbuddy-$uid.json",
+            content = demoExportJson(listOf(a)),
+            exported = 1,
+            skipped = 0,
+        )
+    }
+
+    override suspend fun exportAll(): ExportResult {
+        tick()
+        return ExportResult(
+            fileName = "workbuddy-accounts-demo.json",
+            content = demoExportJson(accounts),
+            exported = accounts.size,
+            skipped = 0,
+        )
+    }
+
+    /** 演示导出体：只保留形状（嵌套 auth/account），token 是占位串，不参与任何真实鉴权。 */
+    private fun demoExportJson(list: List<Account>): String {
+        val docs = list.map { a ->
+            buildJsonObject {
+                putJsonObject("auth") {
+                    put("accessToken", "demo-access-${a.uid}")
+                    put("refreshToken", "demo-refresh-${a.uid}")
+                    put("expiresAt", 0)
+                    put("domain", "")
+                    put("realm", a.realm)
+                }
+                putJsonObject("account") {
+                    put("uid", a.uid)
+                    put("enterpriseId", "")
+                    put("nickname", a.nickname)
+                }
+            }
+        }
+        return JsonArray(docs).toString()
     }
 
     override suspend fun accountAction(uid: String, action: AccountAction): ActionResult {

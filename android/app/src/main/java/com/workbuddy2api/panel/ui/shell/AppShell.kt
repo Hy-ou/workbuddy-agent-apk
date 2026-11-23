@@ -7,6 +7,7 @@ import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.heightIn
+import androidx.compose.foundation.layout.imePadding
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.rememberScrollState
 import androidx.compose.foundation.verticalScroll
@@ -110,16 +111,26 @@ fun AppShell(vm: AppViewModel, session: Session, repo: WbRepository, initialTab:
     }
     val hideChrome = dshActive && dshImmersive
 
+    // 键盘是否弹起。底部 6 Tab 在键盘态让位（隐藏），内容改由 imePadding 顶到键盘上沿：
+    //  - API 30+：窗口不再被 IME 压缩，不自己消费 ime insets 就会被键盘盖住（issue #2）；
+    //  - API < 30：adjustResize 压的是窗口，Tab 会「悬浮」到键盘上方造成误触（issue #1）。
+    // 两种 API 在这里统一成同一个行为：键盘在 = 没有 Tab，输入框贴键盘。
+    val imeVisible = rememberImeVisible()
+    val showBottomBar = route == Route.Main && !hideChrome && !imeVisible
+
     BackHandler(enabled = route != Route.Main) { route = Route.Main }
     // 全屏时先退出全屏，再让系统处理返回（避免一按返回就直接退出 App）。
     BackHandler(enabled = hideChrome) { dshImmersive = false }
+    // DSH 是「二级页」：标准布局下侧滑/返回先回总览，别让一次误触把带内核的 App 直接 finish。
+    // 注册在本块最后 → 优先级高于上面的 route/hideChrome 两个，二者为 false 时才轮到这里。
+    BackHandler(enabled = route == Route.Main && dshActive && !hideChrome) { tab = 0 }
 
     Scaffold(
         modifier = Modifier.fillMaxSize(),
         containerColor = wb.bg,
         snackbarHost = { SnackbarHost(snackbar) },
         bottomBar = {
-            if (route == Route.Main && !hideChrome) {
+            if (showBottomBar) {
                 NavigationBar(containerColor = wb.surface, tonalElevation = 0.dp) {
                     tabs.forEachIndexed { index, item ->
                         NavigationBarItem(
@@ -141,10 +152,16 @@ fun AppShell(vm: AppViewModel, session: Session, repo: WbRepository, initialTab:
         },
     ) { padding ->
         CompositionLocalProvider(LocalSnackbar provides snackbar) {
+            // 内容区底部让位（互斥，不叠加）：
+            //   键盘态   → 0，交给 imePadding（此时 Tab 已隐藏，键盘自己盖住导航栏）
+            //   沉浸全屏 → 0，页面顶到屏幕底
+            //   其它     → Scaffold 给的 padding：有 Tab 时是 Tab 高，二级页时是导航栏 inset
+            val contentBottom = if (imeVisible || hideChrome) 0.dp else padding.calculateBottomPadding()
             Box(
                 Modifier
                     .fillMaxSize()
-                    .padding(bottom = if (hideChrome) 0.dp else padding.calculateBottomPadding()),
+                    .padding(bottom = contentBottom)
+                    .imePadding(),
             ) {
                 when (route) {
                     Route.Main -> when (tab) {

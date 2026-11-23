@@ -1,5 +1,7 @@
 package com.workbuddy2api.panel.ui.accounts
 
+import androidx.activity.compose.rememberLauncherForActivityResult
+import androidx.activity.result.contract.ActivityResultContracts
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.Row
@@ -26,6 +28,7 @@ import androidx.compose.runtime.rememberCoroutineScope
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
+import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.text.font.FontFamily
 import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
@@ -34,6 +37,7 @@ import com.workbuddy2api.panel.data.Account
 import com.workbuddy2api.panel.data.AccountAction
 import com.workbuddy2api.panel.data.ActionResult
 import com.workbuddy2api.panel.data.BulkAction
+import com.workbuddy2api.panel.data.ExportResult
 import com.workbuddy2api.panel.data.WbHttpException
 import com.workbuddy2api.panel.data.WbRepository
 import com.workbuddy2api.panel.ui.components.ConfirmDialog
@@ -87,6 +91,28 @@ fun AccountDetailSheet(
 
     var running by remember { mutableStateOf<AccountAction?>(null) }
     var confirmRemove by remember { mutableStateOf(false) }
+
+    // 单账号凭证导出（与 Web 面板每行右侧的「导出」一致）。内容含明文 token，
+    // 只写进用户通过系统文件选择器指定的位置。
+    val context = LocalContext.current
+    var exporting by remember { mutableStateOf(false) }
+    var pendingExport by remember { mutableStateOf<ExportResult?>(null) }
+    val exportSaver = rememberLauncherForActivityResult(
+        ActivityResultContracts.CreateDocument("application/json"),
+    ) { uri ->
+        val data = pendingExport
+        pendingExport = null
+        if (uri == null || data == null) {
+            exporting = false
+            return@rememberLauncherForActivityResult
+        }
+        scope.launch {
+            runCatching { writeExportFile(context, uri, data.content) }
+                .onSuccess { snackbar.showSnackbar(acctExportMessage(data)) }
+                .onFailure { snackbar.showSnackbar("导出失败：${it.message}") }
+            exporting = false
+        }
+    }
 
     /** 执行单个账号动作；成功后提示并刷新列表，移除则关闭弹层。 */
     fun run(action: AccountAction) {
@@ -323,6 +349,28 @@ fun AccountDetailSheet(
                 }
                 Spacer(Modifier.height(8.dp))
             }
+
+            // 凭证导出单独一行：它不是 AccountAction（不改服务端账号状态，只读一份凭证快照）。
+            WbButton(
+                text = if (exporting) "正在导出…" else "导出凭证（含 token）",
+                onClick = {
+                    if (!exporting) {
+                        exporting = true
+                        scope.launch {
+                            try {
+                                val result = repo.exportAccount(account.uid)
+                                pendingExport = result
+                                exportSaver.launch(result.fileName)
+                            } catch (e: Exception) {
+                                exporting = false
+                                snackbar.showSnackbar(acctExportFailure(e))
+                            }
+                        }
+                    }
+                },
+                modifier = Modifier.fillMaxWidth(),
+                enabled = running == null && !exporting,
+            )
         }
     }
 

@@ -4,9 +4,11 @@ import android.annotation.SuppressLint
 import android.app.Activity
 import android.content.Context
 import android.content.ContextWrapper
+import android.os.Build
 import android.os.SystemClock
 import android.util.Log
 import android.webkit.ConsoleMessage
+import android.webkit.RenderProcessGoneDetail
 import android.webkit.WebChromeClient
 import android.webkit.WebResourceRequest
 import android.webkit.WebView
@@ -50,6 +52,7 @@ import androidx.compose.runtime.Composable
 import androidx.compose.runtime.DisposableEffect
 import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.getValue
+import androidx.compose.runtime.key
 import androidx.compose.runtime.mutableIntStateOf
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
@@ -68,6 +71,9 @@ import androidx.compose.ui.viewinterop.AndroidView
 import androidx.core.view.WindowCompat
 import androidx.core.view.WindowInsetsCompat
 import androidx.core.view.WindowInsetsControllerCompat
+import androidx.lifecycle.Lifecycle
+import androidx.lifecycle.LifecycleEventObserver
+import androidx.lifecycle.compose.LocalLifecycleOwner
 import androidx.lifecycle.compose.collectAsStateWithLifecycle
 import com.workbuddy2api.panel.dsh.DshManager
 import com.workbuddy2api.panel.dsh.DshManager.State
@@ -78,6 +84,7 @@ import com.workbuddy2api.panel.ui.components.WbButton
 import com.workbuddy2api.panel.ui.components.WbCard
 import com.workbuddy2api.panel.ui.components.WbTopBar
 import com.workbuddy2api.panel.ui.theme.LocalWbColors
+import com.workbuddy2api.panel.util.WebViewDumps
 import kotlinx.coroutines.launch
 
 /**
@@ -357,11 +364,79 @@ private fun InfoCopyRow(label: String, value: String, onCopy: () -> Unit) {
     }
 }
 
-@SuppressLint("SetJavaScriptEnabled")
+/**
+ * DSH 的 WebView 入口：负责在渲染进程死亡后**整实例重建**。
+ *
+ * Chromium 的规则是「只要有一个关联 WebView 没有认领渲染进程的死亡，就 abort 整个宿主进程」
+ * （日志原文：`Render process (N) kill (OOM or update) wasn't handed by all associated webviews,
+ * killing application.`）。认领 = [WebViewClient.onRenderProcessGone] 返回 true。
+ *
+ * 认领之后旧实例已经废了（连 loadUrl 都不行），只能新建：这里用 generation 当 key，
+ * 让 AndroidView 重新走一次 factory。URL 由 [DshManager.webUrl] 给出——token 已消费时
+ * 自动退回 cookie 会话的 base URL，不会重放一次性 token。
+ */
 @Composable
 private fun DshWebView(
     manager: DshManager,
     onChromeMajor: (Int) -> Unit = {},
+) {
+    var generation by remember { mutableIntStateOf(0) }
+    // 崩了就重建，但必须防「一加载就崩」形成无限重建：连续多次之后停下来让用户手动重启内核。
+    if (generation > MAX_RENDERER_REBUILDS) {
+        DshRendererCrashCard(
+            onRestart = {
+                generation = 0
+                manager.restartAsync()
+            },
+        )
+        return
+    }
+    key(generation) {
+        DshWebViewInstance(
+            manager = manager,
+            onChromeMajor = onChromeMajor,
+            onRendererGone = { crashed, killedBySystem ->
+                Log.e(
+                    TAG_WEB,
+                    "renderer gone crashed=$crashed killedBySystem=$killedBySystem，重建 WebView #${generation + 1}",
+                )
+                generation++
+            },
+        )
+    }
+}
+
+/** 渲染进程连续异常退出、自动重建已达上限时的兜底界面。 */
+@Composable
+private fun DshRendererCrashCard(onRestart: () -> Unit) {
+    val wb = LocalWbColors.current
+    Box(Modifier.fillMaxSize().padding(24.dp), contentAlignment = Alignment.Center) {
+        WbCard(Modifier.fillMaxWidth()) {
+            Text("DSH 页面反复崩溃", style = MaterialTheme.typography.titleMedium, color = wb.bad)
+            Spacer(Modifier.height(6.dp))
+            Text(
+                "内核页面连续 ${MAX_RENDERER_REBUILDS + 1} 次渲染进程异常退出，已停止自动重载。" +
+                    "重启内核可以清掉这次异常状态，会话与凭证都保留。",
+                style = MaterialTheme.typography.bodySmall,
+                color = wb.ink2,
+            )
+            Spacer(Modifier.height(14.dp))
+            WbButton(
+                text = "重启内核",
+                onClick = onRestart,
+                primary = true,
+                modifier = Modifier.fillMaxWidth(),
+            )
+        }
+    }
+}
+
+@SuppressLint("SetJavaScriptEnabled")
+@Composable
+private fun DshWebViewInstance(
+    manager: DshManager,
+    onChromeMajor: (Int) -> Unit,
+    onRendererGone: (crashed: Boolean, killedBySystem: Boolean) -> Unit,
 ) {
     val wb = LocalWbColors.current
     // DSH 的 token URL 是一次性的，只能加载一次；重复加载会显示
@@ -406,6 +481,24 @@ private fun DshWebView(
     // 离开 DSH 页 / 内核重启时主动销毁 WebView：AndroidView 不会替我们释放，
     // 反复进出会累积渲染进程与 JS 堆（内存越用越紧，最终表现为整体卡顿）。
     val webHolder = remember { WebViewHolder() }
+    // 前后台切换时暂停/恢复这一个 WebView 的排版与 JS 定时器：后台空转是渲染进程
+    // 长期几百 MB 的一部分。不要用 pauseTimers()——它对整个 App 生效，会打断 DSH 的
+    // 流式输出；也不要多实例共用一个 pause 广播。
+    val lifecycleOwner = LocalLifecycleOwner.current
+    androidx.compose.runtime.DisposableEffect(lifecycleOwner) {
+        val observer = LifecycleEventObserver { _, event ->
+            val v = webHolder.view ?: return@LifecycleEventObserver
+            runCatching {
+                when (event) {
+                    Lifecycle.Event.ON_STOP -> v.onPause()
+                    Lifecycle.Event.ON_START -> v.onResume()
+                    else -> Unit
+                }
+            }
+        }
+        lifecycleOwner.lifecycle.addObserver(observer)
+        onDispose { lifecycleOwner.lifecycle.removeObserver(observer) }
+    }
     androidx.compose.runtime.DisposableEffect(Unit) {
         onDispose {
             val v = webHolder.view
@@ -442,7 +535,38 @@ private fun DshWebView(
                     mediaPlaybackRequiresUserGesture = true
                     javaScriptCanOpenWindowsAutomatically = false
                 }
+                // 提高渲染进程优先级：内存紧张时别第一批被回收（只是降概率，不是根治）。
+                if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.O) {
+                    runCatching { setRendererPriorityPolicy(WebView.RENDERER_PRIORITY_IMPORTANT, false) }
+                }
                 webViewClient = object : WebViewClient() {
+                    /**
+                     * 渲染进程的死亡必须由 WebView 认领，否则 Chromium 直接 abort 宿主机进程。
+                     *
+                     * 返回 true 只表示「我处理了这次死亡」，不表示渲染进程没崩——所以这里
+                     * 立刻把死因落日志、抢救 crashpad 转储，再交给上层切 generation 重建实例。
+                     * 绝不能在死掉的实例上继续 loadUrl。
+                     *
+                     * 死因只有两个值：`didCrash() == true` 是渲染进程自己崩（会走 crashpad、
+                     * 通常是 SIGTRAP/exit code 5）；false 是被系统清理（OOM/update，exit code -1）。
+                     * 平台没有暴露 didCrashDueToOOM，OOM 只能从「非 crash」+ ApplicationExitInfo 推。
+                     */
+                    override fun onRenderProcessGone(view: WebView, detail: RenderProcessGoneDetail): Boolean {
+                        // didCrash() 是 API 26；本方法本身也只会在 26+ 被框架调用，但 lint 需要显式守卫。
+                        val crashed = if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.O) {
+                            runCatching { detail.didCrash() }.getOrDefault(false)
+                        } else {
+                            false
+                        }
+                        Log.e(
+                            TAG_WEB,
+                            "onRenderProcessGone crashed=$crashed killedBySystem=${!crashed} url=${view.url}",
+                        )
+                        runCatching { WebViewDumps.salvage(view.context.applicationContext) }
+                        onRendererGone(crashed, !crashed)
+                        return true
+                    }
+
                     override fun shouldOverrideUrlLoading(
                         view: WebView,
                         request: WebResourceRequest,
@@ -597,6 +721,9 @@ private fun DshWebView(
 
 private const val TAG_WEB = "WbDshWeb"
 
+/** 渲染进程连续死亡时最多自动重建几次；超过就停下来让用户重启内核，避免无限重建。 */
+private const val MAX_RENDERER_REBUILDS = 3
+
 /** WebView 持有者：只用于离开页面时销毁实例，不参与 Compose 重组。 */
 private class WebViewHolder {
     var view: WebView? = null
@@ -708,7 +835,7 @@ private const val FILE_PROBE_JS = """
  * MutationObserver，聊天流式输出时每个 token 都会重置定时器，随后全量遍历所有
  * 样式表 + 所有 `[style]` 元素做 `setProperty`——相当于每 350ms 强制一次整页样式
  * 重算，是控制台滚动/打字掉帧的主因。现在：
- *   1. 高度只在视口尺寸真的变化时更新（ResizeObserver + 高度去重）；
+ *   1. 高度只在视口尺寸真的变化时更新（ResizeObserver + visualViewport/resize + 高度去重）；
  *   2. 全量样式换算只在首帧做一次；
  *   3. 只监听 <head> 里新增的 <style>/<link>，并且只补丁新增节点。
  */
@@ -747,8 +874,17 @@ private const val VH_FIX_JS = """
     }
     try { patchInline(); } catch (e) {}
   }
+  function viewportH(){
+    // 不能量 documentElement.clientHeight：一旦下面的样式把 html 钉成 N px，
+    // clientHeight 就恒等于 N，ResizeObserver 看不到任何变化（键盘弹出会让 WebView
+    // 变矮，但页面高度卡在旧值上，输入框照样被挡住）。visualViewport/innerHeight
+    // 才是真视口。
+    var vv = window.visualViewport;
+    var h = (vv && vv.height) || window.innerHeight || document.documentElement.clientHeight || 0;
+    return Math.round(h);
+  }
   function apply(){
-    var h = document.documentElement.clientHeight || window.innerHeight || 0;
+    var h = viewportH();
     if (!h) return;
     var changed = Math.abs(h - H) >= 1;
     H = h;
@@ -775,8 +911,12 @@ private const val VH_FIX_JS = """
   // 只跟随视口尺寸变化（转屏/全屏切换/键盘），不再监听整棵 DOM。
   try {
     new ResizeObserver(function(){ window.__wbVhFix(); }).observe(document.documentElement);
-  } catch (e) {
-    window.addEventListener('resize', function(){ window.__wbVhFix(); }, { passive: true });
+  } catch (e) {}
+  // resize / visualViewport.resize 无条件注册：ResizeObserver 盯的是 documentElement 的
+  // 盒子，而 html 的高度已被本补丁钉成 px，键盘出来时它不会变——必须直接听视口事件。
+  window.addEventListener('resize', function(){ window.__wbVhFix(); }, { passive: true });
+  if (window.visualViewport) {
+    window.visualViewport.addEventListener('resize', function(){ window.__wbVhFix(); }, { passive: true });
   }
   window.addEventListener('orientationchange', function(){ setTimeout(function(){ window.__wbVhFix(); }, 260); }, { passive: true });
   // SPA 运行时新增的样式表：只补丁新增的那一个节点。

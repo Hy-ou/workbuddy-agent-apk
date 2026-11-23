@@ -177,4 +177,51 @@ class WbApiTest {
         assertEquals("/panel/api/tasks/run_queue", req.path)
         assertTrue(req.body.readUtf8().contains("\"concurrency\":3"))
     }
+
+    @Test fun exportAllParsesFilenameAndCounts() = runBlocking {
+        // 与服务端 internal/panel/export.go 的 contracts 对齐：文件名走 Content-Disposition，
+        // 数量走 X-Exported-Count / X-Skipped-Count。
+        server.enqueue(
+            MockResponse()
+                .setHeader("Content-Type", "application/json; charset=utf-8")
+                .setHeader("Content-Disposition", "attachment; filename=\"workbuddy-accounts-20261106-001500.json\"")
+                .setHeader("X-Exported-Count", "6")
+                .setHeader("X-Skipped-Count", "1")
+                .setBody("[{\"auth\":{\"accessToken\":\"a\"}}]"),
+        )
+        val repo = RemoteWbRepository(server.url("/").toString(), "k")
+        val res = repo.exportAll()
+        assertEquals("workbuddy-accounts-20261106-001500.json", res.fileName)
+        assertEquals(6, res.exported)
+        assertEquals(1, res.skipped)
+        assertTrue(res.content.contains("accessToken"))
+        val req = server.takeRequest()
+        assertEquals("/panel/api/accounts/export", req.path)
+        assertEquals("Bearer k", req.getHeader("Authorization"))
+    }
+
+    @Test fun exportAccountFallsBackToLocalFilename() = runBlocking {
+        // 没有 Content-Disposition（中间层剥头）时用本地兜底名，文件名为空会让 SAF 无法保存。
+        server.enqueue(
+            MockResponse().setHeader("Content-Type", "application/json").setBody("{\"auth\":{}}"),
+        )
+        val repo = RemoteWbRepository(server.url("/").toString(), "k")
+        val res = repo.exportAccount("u-1")
+        assertEquals("workbuddy-u-1.json", res.fileName)
+        assertEquals(0, res.exported)
+        assertEquals(0, res.skipped)
+        assertEquals("/panel/api/accounts/u-1/export", server.takeRequest().path)
+    }
+
+    @Test fun exportOnOldGatewaySurfacesHttpError() = runBlocking {
+        // 旧网关没有 /export 路由：必须是 WbHttpException，UI 才能提示「升级网关」。
+        server.enqueue(MockResponse().setResponseCode(404).setBody("404 page not found"))
+        val repo = RemoteWbRepository(server.url("/").toString(), "k")
+        try {
+            repo.exportAll()
+            fail("expected WbHttpException")
+        } catch (e: WbHttpException) {
+            assertEquals(404, e.status)
+        }
+    }
 }

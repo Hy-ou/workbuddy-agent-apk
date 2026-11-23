@@ -5,6 +5,73 @@
 
 ---
 
+## 3.13.4 — 2026-11-23
+
+### 修复：issue #1 / #2 —— 软键盘相关（底部 Tab 上移、输入框被遮挡）
+
+- **根因（同一个缺陷的两个 API 分支）**：`enableEdgeToEdge()` 从骨架起就在，而 DSH 分支
+  从来没有消费过 IME insets（`git log -S imePadding` 只有助手页与连接页）。
+  - API ≤ 29：`adjustResize` 压的是窗口 → `Scaffold` 的 bottomBar 整体上移到键盘上方，
+    打字误触 Tab（issue #1）。
+  - API ≥ 30：`setDecorFitsSystemWindows(false)` 之后窗口不再压缩，IME 以 insets 下发，
+    没人消费 → 页面底部（含输入框）被键盘盖住（issue #2）。
+- **修复**：
+  - 新增 `ui/shell/ImeState.kt#rememberImeVisible()`：API 30+ 读 `WindowInsets.isImeVisible`，
+    API < 30 用 `getWindowVisibleDisplayFrame()` 的历史最大可见底部做帧差兜底（分屏/小窗
+    不会误判）；不抢 `AndroidComposeView` 的 insets 监听器，全 App insets 不受影响。
+  - `AppShell`：键盘态隐藏底部 6 Tab，内容用 `imePadding()` 顶到键盘上沿；Tab 高与键盘高
+    互斥，不会出现双份留白。
+  - `AppShell`：DSH 页补返回键处理——标准布局下侧滑/返回回「总览」，不再一次误触就
+    finish 掉带内核的 App（issue #1 评论里的第二条）。
+- **次生 bug 一并修**：`VH_FIX_JS` 原本用 `document.documentElement.clientHeight` 量视口，
+  但 `html` 的高度被自己钉成固定 px 后 `clientHeight` 就冻结在旧值，`ResizeObserver` 观察的
+  是 `documentElement` 的盒子 → 键盘让 WebView 变矮也不会重算。改为
+  `visualViewport.height || innerHeight`，并**无条件**注册 `resize` 与
+  `visualViewport.resize` 监听。
+
+### 修复：issue #4 —— WebView 渲染进程死亡导致整个 App 闪退
+
+- **根因**：全仓 0 处 `onRenderProcessGone`。渲染进程异常退出后 Chromium 判定
+  「没有 WebView 认领这次死亡」，直接 abort 宿主进程（logcat：
+  `Render process (N) kill (OOM or update) wasn't handed by all associated webviews, killing application.`）。
+- **修复**：`DshScreen` 的 `WebViewClient` 覆写 `onRenderProcessGone` 并返回 `true`，
+  立刻记录 `didCrash()`（true = 自身崩溃；false = 被系统清理）与 `killedBySystem`、
+  抢救 crashpad 转储，然后用 `generation` 作为 `key` **整实例重建** WebView
+  （死实例连 `loadUrl` 都不可用）。重建走 `DshManager.webUrl()`，token 已消费时自动退回
+  cookie 会话的 base URL，不重放一次性 token。
+- **覆盖全部实例**：`DiagnosticsCard` 里取 UA 用的瞬时 WebView 也挂上返回 `true` 的 client
+  （「all associated webviews」按实例算，漏一个照样 abort）。
+- **降概率**：`setRendererPriorityPolicy(RENDERER_PRIORITY_IMPORTANT, false)`（API 26+）；
+  前后台切换时对该 WebView `onPause()/onResume()`（不用 `pauseTimers()`，它对全 App 生效，
+  会打断流式输出）。
+
+### 新增：崩溃取证（`WbApplication`）
+
+- `ApplicationExitInfo`（API 30+）读回最近 5 次进程退出原因，落到 `files/exit-info.log`
+  （CRASH / CRASH_NATIVE / LOW_MEMORY / SIGNALED / ANR…），不再依赖 root/Shizuku 翻 tombstone。
+- `WebViewDumps.salvage()`：crashpad 转储写在 `cache/WebView/Crashpad`，保留策略由 WebView
+  提供方与系统缓存清理决定（App 改不了），因此在崩溃瞬间抢拷到 `files/webview-crash/`，
+  保留 7 天 / 最多 40 个文件。
+
+### 新增：issue #3 —— 账号凭证导出
+
+- 网关早就实现了导出（`GET /panel/api/accounts/{uid}/export`、`GET /panel/api/accounts/export`），
+  Web 面板也有「导出 / 批量导出」按钮，**只有 Android 面板没有入口**，属功能缺口而非 bug。
+- `WbApi.getRaw()`（读 `Content-Disposition` / `X-Exported-Count` / `X-Skipped-Count`）→
+  `WbRepository.exportAccount(uid)` / `exportAll()` → 账号页溢出菜单「导出全部凭证」与
+  账号详情弹层「导出凭证（含 token）」，用 SAF `CreateDocument` 落盘。
+- 旧网关没有该路由时给「请升级网关或改用内置网关」的可读提示；文件含明文 token，UI 明确提示保管。
+
+### 版本与验证
+
+- 版本 **3.13.4 / versionCode 33**；`testDebugUnitTest` **61 项通过**（新增 3 项导出契约测试）、
+  `lintDebug` **0 error**（18 条既有 warning）。
+- 关键路径未做真机验证（本机未连设备）：键盘态 Tab 隐藏/输入框吸附、渲染进程被杀后自动重建
+  两条需要在 Android 10 与 Android 11+ 各跑一次。详见
+  [release/RELEASE_NOTES-3.13.4.md](release/RELEASE_NOTES-3.13.4.md)。
+
+---
+
 ## 3.13.3 — 2026-11-11
 
 ### DSH 布局：标准 / 沉浸全屏两种选择

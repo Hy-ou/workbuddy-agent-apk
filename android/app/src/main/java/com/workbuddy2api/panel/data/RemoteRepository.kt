@@ -112,10 +112,33 @@ class RemoteWbRepository(serverUrl: String, apiKey: String) : WbRepository {
     override suspend fun bulkAction(action: BulkAction): ActionResult =
         postJson(action.path, null, timeout = if (action.async) 30 else 180)
 
+    override suspend fun exportAccount(uid: String): ExportResult =
+        api.getRaw("accounts/${enc(uid)}/export").toExport("workbuddy-$uid.json")
+
+    override suspend fun exportAll(): ExportResult =
+        api.getRaw("accounts/export").toExport("workbuddy-accounts.json")
+
+    /** 服务端回 `Content-Disposition: attachment; filename="…"`，解析不到就用本地兜底名。 */
+    private fun WbRawResponse.toExport(fallbackName: String): ExportResult {
+        val cd = header("Content-Disposition").orEmpty()
+        val name = DISPOSITION_FILENAME.find(cd)?.groupValues?.getOrNull(1)
+            ?.trim()?.takeIf { it.isNotBlank() } ?: fallbackName
+        return ExportResult(
+            fileName = name,
+            content = body,
+            exported = header("X-Exported-Count")?.toIntOrNull() ?: 0,
+            skipped = header("X-Skipped-Count")?.toIntOrNull() ?: 0,
+        )
+    }
+
     override fun close() = api.close()
 
     private fun enc(s: String): String = URLEncoder.encode(s, "UTF-8")
 
     private fun parseObject(text: String): JsonObject =
         runCatching { WbJson.parseToJsonElement(text).jsonObject }.getOrElse { JsonObject(emptyMap()) }
+
+    private companion object {
+        val DISPOSITION_FILENAME = Regex("filename=\"?([^\";]+)\"?")
+    }
 }

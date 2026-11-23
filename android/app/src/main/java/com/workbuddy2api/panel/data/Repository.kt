@@ -3,6 +3,19 @@ package com.workbuddy2api.panel.data
 import kotlinx.serialization.json.JsonObject
 
 /**
+ * 账号凭证导出的结果。
+ *
+ * [content] 是网关原样返回的 JSON 文本（含明文 token），由调用方写入用户选择的文件；
+ * [fileName] 优先取服务端 `Content-Disposition`，批量导出带时间戳。
+ */
+data class ExportResult(
+    val fileName: String,
+    val content: String,
+    val exported: Int,
+    val skipped: Int,
+)
+
+/**
  * 面板数据仓库：UI 只依赖这个接口。
  *
  * 远程实现 [RemoteWbRepository] 走 HTTP；[DemoWbRepository] 提供离线演示数据。
@@ -54,6 +67,21 @@ interface WbRepository {
      * 与服务端 `POST /panel/api/import/cockpit` 一致：返回总数/成功/跳过数与逐条错误。
      */
     suspend fun importCockpit(fileName: String, content: ByteArray): ImportResult
+
+    /**
+     * 导出一个账号的凭证 JSON（与网关 `auths/workbuddy-*.json` 同构，可直接放回 auths/ 目录）。
+     *
+     * 与服务端 `GET /panel/api/accounts/{uid}/export` 一致：**内容含 accessToken /
+     * refreshToken 明文**，只能落进用户自己选的文件，不要写日志、不要缓存。
+     */
+    suspend fun exportAccount(uid: String): ExportResult
+
+    /**
+     * 批量导出全部账号凭证为单个 JSON 数组（元素与单账号导出一致）。
+     *
+     * 与服务端 `GET /panel/api/accounts/export` 一致；凭证为空等异常账号计入 skipped。
+     */
+    suspend fun exportAll(): ExportResult
 
     suspend fun accountAction(uid: String, action: AccountAction): ActionResult
     suspend fun bulkAction(action: BulkAction): ActionResult

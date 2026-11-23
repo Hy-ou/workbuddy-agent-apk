@@ -60,6 +60,7 @@ import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 import com.workbuddy2api.panel.data.Account
 import com.workbuddy2api.panel.data.BulkAction
+import com.workbuddy2api.panel.data.ExportResult
 import com.workbuddy2api.panel.data.ImportResult
 import com.workbuddy2api.panel.data.Overview
 import com.workbuddy2api.panel.data.WbHttpException
@@ -129,6 +130,44 @@ fun AccountsScreen(repo: WbRepository) {
     var bulkRunning by remember { mutableStateOf(false) }
     var balanceRunning by remember { mutableStateOf(false) }
 
+    // 凭证导出：网关侧早已实现（GET /panel/api/accounts[/{uid}]/export），Android 面板补入口。
+    // 导出内容含 accessToken / refreshToken 明文，只写进用户通过系统文件选择器指定的位置。
+    val context = LocalContext.current
+    var exporting by remember { mutableStateOf(false) }
+    var pendingExport by remember { mutableStateOf<ExportResult?>(null) }
+    val exportSaver = rememberLauncherForActivityResult(
+        ActivityResultContracts.CreateDocument("application/json"),
+    ) { uri ->
+        val data = pendingExport
+        pendingExport = null
+        if (uri == null || data == null) {
+            exporting = false
+            return@rememberLauncherForActivityResult
+        }
+        scope.launch {
+            runCatching { writeExportFile(context, uri, data.content) }
+                .onSuccess { snackbar.showSnackbar(acctExportMessage(data)) }
+                .onFailure { snackbar.showSnackbar("导出失败：${it.message}") }
+            exporting = false
+        }
+    }
+
+    /** 批量导出全部账号凭证：先取内容，再让用户选落点（文件名默认用服务端带时间戳的那个）。 */
+    fun exportAll() {
+        if (exporting) return
+        exporting = true
+        scope.launch {
+            try {
+                val result = repo.exportAll()
+                pendingExport = result
+                exportSaver.launch(result.fileName)
+            } catch (e: Exception) {
+                exporting = false
+                snackbar.showSnackbar(acctExportFailure(e))
+            }
+        }
+    }
+
     // 显式命名 load，避免 vararg 与尾随 lambda 的解析歧义。
     val loader = rememberPollingLoader(intervalMs = 5000L, load = { repo.overview() })
     // Ready 带泛型参数，显式写出 Overview 以免裸类型推断问题。
@@ -192,6 +231,15 @@ fun AccountsScreen(repo: WbRepository) {
                     Icon(Icons.Filled.MoreVert, contentDescription = "批量操作", tint = colors.ink)
                 }
                 DropdownMenu(expanded = overflowOpen, onDismissRequest = { overflowOpen = false }) {
+                    // 与 Web 面板的「批量导出」对齐：单个账号的导出在详情弹层里。
+                    DropdownMenuItem(
+                        text = { Text("导出全部凭证", style = MaterialTheme.typography.bodyMedium) },
+                        enabled = !bulkRunning && !exporting,
+                        onClick = {
+                            overflowOpen = false
+                            exportAll()
+                        },
+                    )
                     BULK_ACTIONS.forEach { action ->
                         DropdownMenuItem(
                             text = { Text(action.label, style = MaterialTheme.typography.bodyMedium) },
@@ -895,3 +943,24 @@ private fun queryDisplayName(context: Context, uri: Uri): String? = runCatching 
         if (index >= 0 && cursor.moveToFirst()) cursor.getString(index) else null
     }
 }.getOrNull()?.takeIf { it.isNotBlank() }
+
+/** 把导出内容写进用户通过 SAF 选定的文件；拿不到输出流时报可读错误。 */
+internal suspend fun writeExportFile(context: Context, uri: Uri, content: String) =
+    withContext(Dispatchers.IO) {
+        val out = context.contentResolver.openOutputStream(uri) ?: error("无法写入所选文件")
+        out.use { it.write(content.toByteArray(Charsets.UTF_8)) }
+    }
+
+/** 导出成功文案：数字 + 文件名 + 凭证敏感性提醒。老网关不回 X-Exported-Count 时不硬报 0 个。 */
+internal fun acctExportMessage(result: ExportResult): String {
+    val count = if (result.exported > 0) "已导出 ${result.exported} 个账号" else "已导出凭证"
+    val skipped = if (result.skipped > 0) "，跳过 ${result.skipped} 个" else ""
+    return "$count（${result.fileName}）$skipped，含 token 请妥善保管"
+}
+
+/** 导出失败文案：旧网关没有 /export 路由时给一句能照做的提示。 */
+internal fun acctExportFailure(error: Throwable): String = when {
+    error is WbHttpException && (error.status == 404 || error.status == 501) ->
+        "当前服务器不支持凭证导出（HTTP ${error.status}），请升级网关或改用内置网关"
+    else -> acctErrorMessage(error)
+}

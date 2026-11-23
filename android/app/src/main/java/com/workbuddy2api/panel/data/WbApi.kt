@@ -20,6 +20,12 @@ import java.util.concurrent.TimeUnit
 /** 带 HTTP 状态的异常：message 已是可直接展示的中文。 */
 class WbHttpException(val status: Int, val body: String, override val message: String) : Exception(message)
 
+/** 原始响应：body + 全部响应头（头名大小写不敏感）。 */
+class WbRawResponse(val body: String, val headers: Map<String, String>) {
+    fun header(name: String): String? =
+        headers.entries.firstOrNull { it.key.equals(name, ignoreCase = true) }?.value
+}
+
 /**
  * 极简 OkHttp 客户端：一个实例对应一个服务器连接。
  *
@@ -48,6 +54,43 @@ class WbApi(baseUrl: String, private val apiKey: String) : Closeable {
     }
 
     suspend fun get(path: String, timeoutSec: Long = 60): String = execute(path, null, timeoutSec)
+
+    /**
+     * 需要读响应头的 GET（账号凭证导出：`Content-Disposition` 给文件名，
+     * `X-Exported-Count` / `X-Skipped-Count` 给数量）。body 仍按字符串返回。
+     */
+    suspend fun getRaw(path: String, timeoutSec: Long = 120): WbRawResponse = withContext(Dispatchers.IO) {
+        val url = if (path.startsWith("http://") || path.startsWith("https://")) path
+        else root.trimEnd('/') + "/" + path.trimStart('/')
+        val builder = Request.Builder().url(url)
+        if (apiKey.isNotBlank()) builder.header("Authorization", "Bearer $apiKey")
+        val call = client.newCall(builder.get().build())
+        if (timeoutSec > 0 && timeoutSec != 60L) {
+            call.timeout().timeout(timeoutSec, TimeUnit.SECONDS)
+        }
+        try {
+            call.execute().use { resp ->
+                val text = resp.body?.string().orEmpty()
+                if (!resp.isSuccessful) {
+                    when (resp.code) {
+                        401 -> throw WbHttpException(401, text, "API Key 无效或已变更")
+                        else -> throw WbHttpException(
+                            resp.code,
+                            text,
+                            parseErrorMessage(text) ?: "请求失败（HTTP ${resp.code}）",
+                        )
+                    }
+                }
+                WbRawResponse(text, resp.headers.toMap())
+            }
+        } catch (e: WbHttpException) {
+            throw e
+        } catch (e: SocketTimeoutException) {
+            throw IOException("连接超时，请检查服务器地址与网络", e)
+        } catch (e: IOException) {
+            throw IOException("无法连接服务器，请检查网络与地址", e)
+        }
+    }
 
     suspend fun post(path: String, json: String? = null, timeoutSec: Long = 60): String =
         execute(path, (json ?: "").toRequestBody(jsonMedia), timeoutSec)
