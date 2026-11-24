@@ -5,6 +5,34 @@
 
 ---
 
+## 3.13.5 — 2026-11-24
+
+### 修复：沉浸全屏下输入区仍被软键盘遮挡（issue #5 / #2 残留）
+
+3.13.4 修好了标准布局，全屏仍然被挡。原因是**三条通道只覆盖了两条**：
+
+| 场景 | `adjustResize` 压窗口 | `imePadding()` | 结果 |
+|---|---|---|---|
+| API 30+（Android 11+） | 不压 | = 键盘高度 | 正常 |
+| API < 30 标准布局 | **压** | 0（pre-30 拿不到 ime insets） | 靠窗口压缩让位，正常 |
+| API < 30 沉浸全屏 | **不压** | 0 | 两条兜底同时失效，键盘直接盖住 |
+
+沉浸态的 `ImmersiveSystemBars` 会把系统栏换成
+`SYSTEM_UI_FLAG_IMMERSIVE_STICKY | LAYOUT_HIDE_NAVIGATION`，这个组合下 `adjustResize`
+不再压缩窗口是 Android 的老问题；而 pre-30 又没有 `WindowInsets.ime`。
+
+- `ImeState` 增加 `bottomShiftPx`：用 `根视图高度 - 可视帧高度` 算出「被键盘盖住了多少」，
+  **只有窗口没被压缩时**才非 0（压缩时两者相等，补了会留白）；API 30+ 恒为 0，
+  继续交给 `imePadding()` 消费 insets。
+- `AppShell` 在 `imePadding()` 之后追加这段底部留白，WebView 因此真正变矮，
+  页面 `resize` → `VH_FIX_JS` 重算 → 输入区上移。
+- 变化时才打一条 `WbIme` 日志（`shift / rootH / frameH / visible`），
+  下次再出问题可以直接 `adb logcat -s WbIme` 判断是「没量到键盘」还是「量到了没生效」。
+
+- 版本 **3.13.5 / versionCode 34**。
+
+---
+
 ## 3.13.4 — 2026-11-23
 
 ### 修复：issue #1 / #2 —— 软键盘相关（底部 Tab 上移、输入框被遮挡）

@@ -41,6 +41,7 @@ import androidx.compose.runtime.saveable.rememberSaveable
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.graphics.vector.ImageVector
+import androidx.compose.ui.platform.LocalDensity
 import androidx.compose.ui.text.font.FontFamily
 import androidx.compose.ui.unit.dp
 import androidx.lifecycle.compose.collectAsStateWithLifecycle
@@ -111,12 +112,15 @@ fun AppShell(vm: AppViewModel, session: Session, repo: WbRepository, initialTab:
     }
     val hideChrome = dshActive && dshImmersive
 
-    // 键盘是否弹起。底部 6 Tab 在键盘态让位（隐藏），内容改由 imePadding 顶到键盘上沿：
-    //  - API 30+：窗口不再被 IME 压缩，不自己消费 ime insets 就会被键盘盖住（issue #2）；
-    //  - API < 30：adjustResize 压的是窗口，Tab 会「悬浮」到键盘上方造成误触（issue #1）。
-    // 两种 API 在这里统一成同一个行为：键盘在 = 没有 Tab，输入框贴键盘。
-    val imeVisible = rememberImeVisible()
+    // 键盘状态。底部 6 Tab 在键盘态让位（隐藏），内容则要看「窗口有没有被系统压缩」：
+    //  - API 30+：窗口不压缩，imePadding() 消费 ime insets；
+    //  - API < 30 标准布局：adjustResize 压窗口，内容已经让开，不能再补 padding；
+    //  - API < 30 沉浸全屏：窗口不压缩、insets 拿不到（issue #5），用 ImeState 量出的
+    //    被遮挡高度自己补。
+    val ime = rememberImeState()
+    val imeVisible = ime.visible
     val showBottomBar = route == Route.Main && !hideChrome && !imeVisible
+    val imeExtraBottom = with(LocalDensity.current) { ime.bottomShiftPx.toDp() }
 
     BackHandler(enabled = route != Route.Main) { route = Route.Main }
     // 全屏时先退出全屏，再让系统处理返回（避免一按返回就直接退出 App）。
@@ -161,7 +165,10 @@ fun AppShell(vm: AppViewModel, session: Session, repo: WbRepository, initialTab:
                 Modifier
                     .fillMaxSize()
                     .padding(bottom = contentBottom)
-                    .imePadding(),
+                    // API 30+：消费 ime insets；API < 30 恒为 0。
+                    .imePadding()
+                    // API < 30 且窗口没被压缩（沉浸全屏）时自己补上被键盘盖住的高度。
+                    .padding(bottom = imeExtraBottom),
             ) {
                 when (route) {
                     Route.Main -> when (tab) {
